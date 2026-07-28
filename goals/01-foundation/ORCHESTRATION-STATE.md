@@ -4,7 +4,7 @@
 
 ## ▶ RESUME HERE
 
-**Next action:** launch `pessimistic-judge` on **task 01.4** (implemented, commit `1ece318`, NOT yet judged — Phase 4 invariant: not complete until judge PASS). Then task 01.5, then Phase 5 final audit.
+**Next action:** decide Goal 01 closure policy for task 01.5 (blocked-ready pending first remote push evidence), then run Phase 5 final audit.
 
 ## Phase status
 
@@ -18,10 +18,17 @@
 | 01.1 scaffold + local git | COMPLETE (commit `191a8ed`) | **PASS 4/5** | done |
 | 01.2 SQLite schema + migrations | COMPLETE (commit `e7e4302`) | **PASS 4/5** | done |
 | 01.3 data-access layer | COMPLETE (commit `3d86030`) | **PASS 4/5** | done |
-| 01.4 app shell | COMPLETE (commit `1ece318`) | **⬜ NOT JUDGED** | ← resume |
-| 01.5 CI pipeline | not started | — | **deferred/BLOCKED**: user chose local-only git (no GitHub remote). Option: author workflow file locally so it activates on first push |
+| 01.4 app shell | COMPLETE (commit `1ece318`) + exception evidence cycle | **PASS 4/5** | done |
+| 01.5 CI pipeline | COMPLETE locally (workflow authored) | **NEEDS FIXES 3/5** | **blocked-ready** pending remote push artifact evidence |
 
-- **Phase 5 (Final audit):** not started — after 01.4 judge (and 01.5 disposition)
+- **Phase 5 (Final audit):** not started — pending 01.5 closure decision (strict block vs accepted deferred)
+
+## Resolution Log
+
+**Task 01.4 escalation resolution:** user chose option 1 (exception evidence cycle).  
+Result: `pessimistic-judge` PASS 4/5 after adding direct Rust seam evidence for DB file materialization at selected first-run path plus app-shell behavioral tests.
+
+**Task 01.5 current disposition:** workflow authored locally at `.github/workflows/ci.yml`; local quality checks pass; judge remains `NEEDS FIXES` only because remote push/run artifact evidence cannot exist until a GitHub remote is added and first push executes.
 
 ## User decisions on record
 
