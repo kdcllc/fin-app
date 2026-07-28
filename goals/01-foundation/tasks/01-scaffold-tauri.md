@@ -1,6 +1,6 @@
 # Task 01.1 — Scaffold Tauri 2.x + React + TypeScript app
 
-Status: todo
+Status: done (judge PASS 4/5, 2026-07-28)
 Depends on: none
 
 ## Objective

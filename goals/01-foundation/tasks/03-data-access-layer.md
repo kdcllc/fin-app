@@ -1,6 +1,6 @@
 # Task 01.3 — Data-access layer & typed API
 
-Status: todo
+Status: done (judge PASS 4/5, 2026-07-28)
 Depends on: 02-sqlite-schema
 
 ## Objective

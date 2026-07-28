@@ -1,6 +1,6 @@
 # Task 01.2 — SQLite schema v1 + migrations
 
-Status: todo
+Status: done (judge PASS 4/5, 2026-07-28)
 Depends on: 01-scaffold-tauri
 
 ## Objective
