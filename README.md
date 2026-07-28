@@ -65,6 +65,22 @@ See the [Tauri Linux prerequisites](https://tauri.app/start/prerequisites/) for 
 | `cargo fmt --check`    | Rust formatting check (run in `src-tauri/`)                        |
 | `cargo clippy`         | Rust lints (run in `src-tauri/`; needs Linux packages above)       |
 
+### Linux Snap note (VS Code / Code Insiders)
+
+When VS Code is installed via Snap, inherited GTK module paths can load Snap runtime
+libraries (`/snap/core20/...`) that are ABI-incompatible with host `glibc`, causing:
+
+- `symbol lookup error: ... libpthread.so.0: undefined symbol: __libc_pthread_init`
+
+If that happens, run Tauri with Snap GTK environment variables removed:
+
+```sh
+env -u GTK_PATH -u GTK_EXE_PREFIX -u GTK_IM_MODULE_FILE npm run tauri dev
+```
+
+If `localhost:1420` is refused, check whether the Tauri process crashed with the symbol
+lookup error above and restart using the command in this section.
+
 ## Project layout
 
 - `src/` — React + TypeScript frontend

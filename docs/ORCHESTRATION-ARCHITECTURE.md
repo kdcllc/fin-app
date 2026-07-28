@@ -466,6 +466,18 @@ npm run tauri dev    # dev window with hot reload
 npm run tauri build  # production bundle
 ```
 
+**Linux Snap runtime note (VS Code / Code Insiders):**
+
+If `npm run tauri dev` fails with a symbol lookup error involving
+`/snap/core20/.../libpthread.so.0` and `__libc_pthread_init`, run:
+
+```bash
+env -u GTK_PATH -u GTK_EXE_PREFIX -u GTK_IM_MODULE_FILE npm run tauri dev
+```
+
+This avoids Snap GTK module path injection that can pull in incompatible runtime
+libraries for the host `glibc`.
+
 **Tests:**
 ```bash
 npm test                      # Vitest (TS core)
