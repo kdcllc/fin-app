@@ -1,0 +1,11 @@
+dist/
+node_modules/
+src-tauri/target/
+src-tauri/gen/
+package-lock.json
+
+# Project docs and planning content — not code, leave untouched
+docs/
+goals/
+.claude/
+skills-lock.json
