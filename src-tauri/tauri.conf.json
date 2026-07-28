@@ -9,11 +9,7 @@
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
-  "plugins": {
-    "sql": {
-      "preload": ["sqlite:fin-app.db"]
-    }
-  },
+  "plugins": {},
   "app": {
     "windows": [
       {
