@@ -1,0 +1,138 @@
+{
+  "labels": [
+    "9002(ExampleBank Personal Checking)",
+    "Metro Power: autopay pay w/CardOne",
+    "Pay@Acme Internet w/CardTwo",
+    "Example City:",
+    "9002(ExampleBank Personal Checking)",
+    "9001(ExampleBank Business Checking)",
+    "Unexpected Vendor Token"
+  ],
+  "expected_normalized": [
+    {
+      "raw_label": "9002(ExampleBank Personal Checking)",
+      "payee": "ExampleBank Personal Checking",
+      "account_hint": {
+        "kind": "last4",
+        "last4": "9002",
+        "payment_method": null
+      },
+      "category_suggestion": null,
+      "is_group_header": false
+    },
+    {
+      "raw_label": "Metro Power: autopay pay w/CardOne",
+      "payee": "Metro Power",
+      "account_hint": {
+        "kind": "payment_method",
+        "last4": null,
+        "payment_method": "CardOne"
+      },
+      "category_suggestion": "utilities",
+      "is_group_header": false
+    },
+    {
+      "raw_label": "Pay@Acme Internet w/CardTwo",
+      "payee": "Acme Internet",
+      "account_hint": {
+        "kind": "payment_method",
+        "last4": null,
+        "payment_method": "CardTwo"
+      },
+      "category_suggestion": "telecom",
+      "is_group_header": false
+    },
+    {
+      "raw_label": "Example City:",
+      "payee": "Example City",
+      "account_hint": {
+        "kind": "unknown",
+        "last4": null,
+        "payment_method": null
+      },
+      "category_suggestion": null,
+      "is_group_header": true
+    },
+    {
+      "raw_label": "9002(ExampleBank Personal Checking)",
+      "payee": "ExampleBank Personal Checking",
+      "account_hint": {
+        "kind": "last4",
+        "last4": "9002",
+        "payment_method": null
+      },
+      "category_suggestion": null,
+      "is_group_header": false
+    },
+    {
+      "raw_label": "9001(ExampleBank Business Checking)",
+      "payee": "ExampleBank Business Checking",
+      "account_hint": {
+        "kind": "last4",
+        "last4": "9001",
+        "payment_method": null
+      },
+      "category_suggestion": null,
+      "is_group_header": false
+    },
+    {
+      "raw_label": "Unexpected Vendor Token",
+      "payee": "Unexpected Vendor Token",
+      "account_hint": {
+        "kind": "unknown",
+        "last4": null,
+        "payment_method": null
+      },
+      "category_suggestion": null,
+      "is_group_header": false
+    }
+  ],
+  "group_header_labels": [
+    "Example City:",
+    "9002(ExampleBank Personal Checking)",
+    "9001(ExampleBank Business Checking)",
+    "Metro Power: autopay pay w/CardOne"
+  ],
+  "expected_group_proposals": [
+    {
+      "payee": "Example City",
+      "labels": [
+        "Example City:",
+        "9002(ExampleBank Personal Checking)",
+        "9001(ExampleBank Business Checking)"
+      ],
+      "account_hint_variants": [
+        {
+          "kind": "last4",
+          "last4": "9001",
+          "payment_method": null
+        },
+        {
+          "kind": "last4",
+          "last4": "9002",
+          "payment_method": null
+        },
+        {
+          "kind": "unknown",
+          "last4": null,
+          "payment_method": null
+        }
+      ],
+      "category_suggestion": null
+    },
+    {
+      "payee": "Metro Power",
+      "labels": [
+        "Metro Power: autopay pay w/CardOne"
+      ],
+      "account_hint_variants": [
+        {
+          "kind": "payment_method",
+          "last4": null,
+          "payment_method": "CardOne"
+        }
+      ],
+      "category_suggestion": "utilities"
+    }
+  ]
+}

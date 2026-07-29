@@ -6,6 +6,8 @@ const COLUMNS = "id, source_file, content_hash, imported_at, row_count";
 export interface ImportLogRepo {
   /** Append-only: record one completed import run (`imported_at` defaults in the DB). */
   append(entry: NewImportLogEntry): Promise<ImportLogEntry>;
+  /** Most recent import for a workbook content hash, or null when unseen. */
+  findLatestByContentHash(contentHash: string): Promise<ImportLogEntry | null>;
   /** All entries, oldest first. */
   list(): Promise<ImportLogEntry[]>;
 }
@@ -29,5 +31,17 @@ export function createImportLogRepo(db: Database): ImportLogRepo {
     async list() {
       return db.select<ImportLogEntry>(`SELECT ${COLUMNS} FROM import_log ORDER BY id`);
     },
+
+      async findLatestByContentHash(contentHash) {
+        const rows = await db.select<ImportLogEntry>(
+          `SELECT ${COLUMNS}
+           FROM import_log
+           WHERE content_hash = ?
+           ORDER BY id DESC
+           LIMIT 1`,
+          [contentHash],
+        );
+        return rows.length > 0 ? rows[0] : null;
+      },
   };
 }

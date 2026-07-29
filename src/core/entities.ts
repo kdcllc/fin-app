@@ -78,20 +78,41 @@ export interface Payment {
   memo: string | null;
   source: PaymentSource;
   external_ref: string | null;
+  source_sheet: string | null;
+  source_row: number | null;
+  source_col: number | null;
+  occurrence_index: number | null;
   /** Set by the DB default `datetime('now')`. */
   created_at: string;
 }
 
-export interface NewPayment {
+interface NewPaymentBase {
   payee_id: number;
   account_id: number;
   category_id?: number | null;
   date: string;
   amount_cents: number;
   memo?: string | null;
-  source: PaymentSource;
   external_ref?: string | null;
 }
+
+export interface NewXlsxPayment extends NewPaymentBase {
+  source: "xlsx";
+  source_sheet: string;
+  source_row: number;
+  source_col: number;
+  occurrence_index: number;
+}
+
+export interface NewNonXlsxPayment extends NewPaymentBase {
+  source: Exclude<PaymentSource, "xlsx">;
+  source_sheet?: null;
+  source_row?: null;
+  source_col?: null;
+  occurrence_index?: null;
+}
+
+export type NewPayment = NewXlsxPayment | NewNonXlsxPayment;
 
 export type PaymentPatch = Partial<NewPayment>;
 
@@ -129,3 +150,27 @@ export interface NewImportLogEntry {
   content_hash: string;
   row_count: number;
 }
+
+export interface XlsxPaymentIdentity {
+  payee_id: number;
+  account_id: number;
+  date: string;
+  amount_cents: number;
+  source_sheet: string;
+  source_row: number;
+  source_col: number;
+  occurrence_index: number;
+}
+
+export type XlsxDedupCheckResult =
+  | {
+      kind: "new";
+    }
+  | {
+      kind: "exact_duplicate";
+      existing: Payment;
+    }
+  | {
+      kind: "potential_duplicate";
+      matches: Payment[];
+    };

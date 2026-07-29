@@ -23,4 +23,9 @@ export interface Database {
   execute(sql: string, params?: SqlValue[]): Promise<ExecuteResult>;
   /** Run a query and return all result rows. */
   select<T>(sql: string, params?: SqlValue[]): Promise<T[]>;
+  /**
+   * Run all operations in `work` in a single SQLite transaction.
+   * The adapter must commit on success and roll back on error.
+   */
+  transaction<T>(work: (tx: Database) => Promise<T>): Promise<T>;
 }

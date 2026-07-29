@@ -52,6 +52,17 @@ export function openTestDb(): TestDb {
         throw mapSqliteError(error);
       }
     },
+    async transaction<T>(work: (tx: Database) => Promise<T>): Promise<T> {
+      raw.exec("BEGIN IMMEDIATE");
+      try {
+        const result = await work(db);
+        raw.exec("COMMIT");
+        return result;
+      } catch (error) {
+        raw.exec("ROLLBACK");
+        throw error;
+      }
+    },
   };
 
   return { db, repos: createRepositories(db), close: () => raw.close() };

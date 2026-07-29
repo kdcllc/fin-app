@@ -215,3 +215,72 @@ input {
   flex-wrap: wrap;
   margin: 1.25rem 0;
 }
+
+/* Import page */
+
+.import-page h2 {
+  margin-top: 0;
+}
+
+.import-wizard ol {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0;
+  margin: 0.75rem 0 1rem;
+  list-style: none;
+}
+
+.import-wizard li {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.25rem 0.7rem;
+  color: var(--muted);
+}
+
+.import-wizard li.active {
+  color: var(--accent-text);
+  border-color: var(--accent);
+  background-color: var(--accent);
+}
+
+.import-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin: 0.75rem 0 1rem;
+}
+
+.import-panel {
+  margin: 1rem 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.75rem;
+  background-color: var(--panel);
+}
+
+.import-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.import-table th,
+.import-table td {
+  border: 1px solid var(--border);
+  padding: 0.45rem;
+  vertical-align: top;
+}
+
+.import-table th {
+  text-align: left;
+}
+
+.import-table input,
+.import-table select {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.import-payee-proposals {
+  margin: 0;
+  padding-left: 1.2rem;
+}

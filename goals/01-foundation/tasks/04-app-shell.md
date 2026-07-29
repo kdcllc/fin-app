@@ -1,6 +1,6 @@
 # Task 01.4 — App shell: navigation, settings, book file management
 
-Status: todo
+Status: done (judge PASS 4/5, 2026-07-29)
 Depends on: 03-data-access-layer
 
 ## Objective

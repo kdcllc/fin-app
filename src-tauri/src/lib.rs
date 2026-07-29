@@ -1,4 +1,5 @@
 mod db;
+mod xlsx_reader;
 
 use std::fs::OpenOptions;
 use std::path::Path;
@@ -81,7 +82,10 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .manage(RegisteredBook(Mutex::new(None)))
-        .invoke_handler(tauri::generate_handler![register_book])
+        .invoke_handler(tauri::generate_handler![
+            register_book,
+            xlsx_reader::read_xlsx_workbook_raw
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

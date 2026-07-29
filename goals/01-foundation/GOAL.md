@@ -13,6 +13,12 @@ Stand up the Tauri 2.x application skeleton with the SQLite data layer, schema m
 - Typed data-access layer: UI never issues raw SQL; all access goes through a repository/command layer.
 - CI builds installable artifacts for Windows, macOS, and Linux on every push to main (git repo + GitHub remote are bootstrapped in task 1).
 
+## Scoped execution note (2026-07-29)
+
+By explicit user directive, orchestration is currently scoped to tasks 01.1-01.4 only.
+Task 01.5 (CI) is deferred until a GitHub remote is added and excluded from the current
+completion audit.
+
 ## Tasks
 
 1. [Scaffold Tauri 2.x + React + TypeScript app](tasks/01-scaffold-tauri.md)

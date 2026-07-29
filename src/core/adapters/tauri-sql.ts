@@ -14,21 +14,51 @@ import { mapSqliteError } from "../errors";
  */
 export async function openTauriDatabase(url: string): Promise<Database> {
   const db = await TauriDatabase.load(url);
-  return {
-    async execute(sql: string, params: SqlValue[] = []): Promise<ExecuteResult> {
-      try {
-        const result = await db.execute(sql, params);
-        return { lastInsertId: result.lastInsertId ?? 0, rowsAffected: result.rowsAffected };
-      } catch (error) {
-        throw mapSqliteError(error);
+  let inTransaction = false;
+
+  async function execute(sql: string, params: SqlValue[] = []): Promise<ExecuteResult> {
+    try {
+      const result = await db.execute(sql, params);
+      return { lastInsertId: result.lastInsertId ?? 0, rowsAffected: result.rowsAffected };
+    } catch (error) {
+      throw mapSqliteError(error);
+    }
+  }
+
+  async function select<T>(sql: string, params: SqlValue[] = []): Promise<T[]> {
+    try {
+      return await db.select<T[]>(sql, params);
+    } catch (error) {
+      throw mapSqliteError(error);
+    }
+  }
+
+  const adapter: Database = {
+    execute,
+    select,
+    async transaction<T>(work: (tx: Database) => Promise<T>): Promise<T> {
+      if (inTransaction) {
+        return work(adapter);
       }
-    },
-    async select<T>(sql: string, params: SqlValue[] = []): Promise<T[]> {
+
+      inTransaction = true;
+      await execute("BEGIN IMMEDIATE");
       try {
-        return await db.select<T[]>(sql, params);
+        const result = await work(adapter);
+        await execute("COMMIT");
+        return result;
       } catch (error) {
-        throw mapSqliteError(error);
+        try {
+          await execute("ROLLBACK");
+        } catch {
+          // Ignore rollback failures to preserve the original error surface.
+        }
+        throw error;
+      } finally {
+        inTransaction = false;
       }
     },
   };
+
+  return adapter;
 }

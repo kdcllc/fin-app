@@ -8,6 +8,7 @@ import type { Repositories } from "./core";
 import { openBook } from "./book";
 import { FirstRun } from "./FirstRun";
 import { PlaceholderPage } from "./pages/PlaceholderPage";
+import { ImportPage } from "./pages/ImportPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { loadSettings, updateSettings, type AppSettings } from "./settings";
 import "./App.css";
@@ -101,6 +102,8 @@ function App() {
       <main className="content">
         {active.id === "settings" ? (
           <SettingsPage settings={phase.settings} onUpdate={handleSettingsUpdate} />
+        ) : active.id === "import" ? (
+          <ImportPage repos={phase.repos} />
         ) : (
           <PlaceholderPage title={active.label} blurb={active.blurb} />
         )}

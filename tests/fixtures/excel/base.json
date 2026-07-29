@@ -1,0 +1,21 @@
+{
+  "source_file": "monthly-bills-base.xlsx",
+  "candidates": [
+    {
+      "date": "2026-01-08",
+      "amount_cents": 4858,
+      "source_sheet": "2026",
+      "source_row": 11,
+      "source_col": 2,
+      "occurrence_index": 1
+    },
+    {
+      "date": "2026-02-09",
+      "amount_cents": 4899,
+      "source_sheet": "2026",
+      "source_row": 11,
+      "source_col": 3,
+      "occurrence_index": 1
+    }
+  ]
+}

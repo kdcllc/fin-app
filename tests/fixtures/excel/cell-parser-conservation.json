@@ -1,0 +1,33 @@
+{
+  "non_empty_data_cells": 4,
+  "cells": [
+    {
+      "sheet": "2026",
+      "row": 11,
+      "col": 2,
+      "month_column": 1,
+      "text": "01/08 $48.58"
+    },
+    {
+      "sheet": "2026",
+      "row": 11,
+      "col": 3,
+      "month_column": 2,
+      "text": "02/09 $48.99\n02/11 $12"
+    },
+    {
+      "sheet": "2026",
+      "row": 11,
+      "col": 4,
+      "month_column": 4,
+      "text": "03/26 $52.44"
+    },
+    {
+      "sheet": "2026",
+      "row": 11,
+      "col": 5,
+      "month_column": 5,
+      "text": "n/a"
+    }
+  ]
+}

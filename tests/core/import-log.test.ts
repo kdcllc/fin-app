@@ -27,4 +27,20 @@ describe("import log repository", () => {
     });
     expect(await t.repos.importLog.list()).toEqual([first, second]);
   });
+
+  it("looks up the latest entry by content hash", async () => {
+    await t.repos.importLog.append({
+      source_file: "2026-bill-pay.xlsx",
+      content_hash: "hash-same",
+      row_count: 40,
+    });
+    const latest = await t.repos.importLog.append({
+      source_file: "2026-bill-pay-v2.xlsx",
+      content_hash: "hash-same",
+      row_count: 41,
+    });
+
+    expect(await t.repos.importLog.findLatestByContentHash("hash-same")).toEqual(latest);
+    expect(await t.repos.importLog.findLatestByContentHash("missing-hash")).toBeNull();
+  });
 });

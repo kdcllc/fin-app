@@ -1,0 +1,23 @@
+{
+  "sheets": [
+    {
+      "name": "2026",
+      "rows": [
+        ["Payee", "Jan", "Feb", "Mar"],
+        ["Power Co", "01/08 $48.58", "02/09 $48.99", ""],
+        ["", "", "03/10 $50.11", ""]
+      ],
+      "nonEmptyCells": [
+        { "row": 1, "col": 1, "value": "Payee" },
+        { "row": 1, "col": 2, "value": "Jan" },
+        { "row": 1, "col": 3, "value": "Feb" },
+        { "row": 1, "col": 4, "value": "Mar" },
+        { "row": 2, "col": 1, "value": "Power Co" },
+        { "row": 2, "col": 2, "value": "01/08 $48.58" },
+        { "row": 2, "col": 3, "value": "02/09 $48.99" },
+        { "row": 3, "col": 3, "value": "03/10 $50.11" }
+      ]
+    }
+  ],
+  "warnings": []
+}

@@ -1,10 +1,10 @@
 # Orchestration State — Goal 01 (Foundation & Scaffolding)
 
-**Saved:** 2026-07-28 · **Workflow:** `/feature-orchestrator start goal 01` (see `docs/ORCHESTRATION-ARCHITECTURE.md`)
+**Saved:** 2026-07-29 · **Workflow:** `/feature-orchestrator start goal 01` (see `docs/ORCHESTRATION-ARCHITECTURE.md`)
 
 ## ▶ RESUME HERE
 
-**Next action:** decide Goal 01 closure policy for task 01.5 (blocked-ready pending first remote push evidence), then run Phase 5 final audit.
+**Next action:** keep task 01.5 deferred per user directive; when a remote exists, run isolated task 01.5 judge loop and then optional full-goal audit including CI criterion.
 
 ## Phase status
 
@@ -21,7 +21,7 @@
 | 01.4 app shell | COMPLETE (commit `1ece318`) + exception evidence cycle | **PASS 4/5** | done |
 | 01.5 CI pipeline | COMPLETE locally (workflow authored) | **NEEDS FIXES 3/5** | **blocked-ready** pending remote push artifact evidence |
 
-- **Phase 5 (Final audit):** not started — pending 01.5 closure decision (strict block vs accepted deferred)
+- **Phase 5 (Final audit):** ✅ scoped APPROVED for tasks 01.1-01.4 (task 01.5 excluded by user directive)
 
 ## Resolution Log
 
@@ -29,6 +29,8 @@
 Result: `pessimistic-judge` PASS 4/5 after adding direct Rust seam evidence for DB file materialization at selected first-run path plus app-shell behavioral tests.
 
 **Task 01.5 current disposition:** workflow authored locally at `.github/workflows/ci.yml`; local quality checks pass; judge remains `NEEDS FIXES` only because remote push/run artifact evidence cannot exist until a GitHub remote is added and first push executes.
+
+**Scoped audit result (2026-07-29):** `pessimistic-judge` APPROVED 4/5 for Goal 01 tasks 01.1-01.4 with no blocking findings in scope. Residual risk is only the intentionally excluded CI task 01.5.
 
 ## User decisions on record
 
