@@ -7,6 +7,7 @@
 import TauriDatabase from "@tauri-apps/plugin-sql";
 import type { Database, ExecuteResult, SqlValue } from "../db";
 import { mapSqliteError } from "../errors";
+import { withDatabaseLockedRetry } from "./locked-retry";
 
 /**
  * Open the book database via `tauri-plugin-sql`. The `sqlite:` URL must match
@@ -14,23 +15,53 @@ import { mapSqliteError } from "../errors";
  */
 export async function openTauriDatabase(url: string): Promise<Database> {
   const db = await TauriDatabase.load(url);
+  // Allow transient lock contention to wait briefly instead of failing immediately.
+  await db.execute("PRAGMA busy_timeout = 5000");
   let inTransaction = false;
+  let queue: Promise<void> = Promise.resolve();
+
+  async function runSerialized<T>(work: () => Promise<T>): Promise<T> {
+    const run = queue.then(work, work);
+    queue = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
 
   async function execute(sql: string, params: SqlValue[] = []): Promise<ExecuteResult> {
-    try {
-      const result = await db.execute(sql, params);
-      return { lastInsertId: result.lastInsertId ?? 0, rowsAffected: result.rowsAffected };
-    } catch (error) {
-      throw mapSqliteError(error);
-    }
+    const run = async () =>
+      withDatabaseLockedRetry(async () => {
+        try {
+          const result = await db.execute(sql, params);
+          let lastInsertId = result.lastInsertId ?? null;
+          if (lastInsertId === null) {
+            const rows = await db.select<Array<{ id: number }>>(
+              "SELECT last_insert_rowid() AS id",
+            );
+            const first = rows[0];
+            lastInsertId = first?.id ?? 0;
+          }
+          return { lastInsertId, rowsAffected: result.rowsAffected };
+        } catch (error) {
+          throw mapSqliteError(error);
+        }
+      });
+
+    return inTransaction ? run() : runSerialized(run);
   }
 
   async function select<T>(sql: string, params: SqlValue[] = []): Promise<T[]> {
-    try {
-      return await db.select<T[]>(sql, params);
-    } catch (error) {
-      throw mapSqliteError(error);
-    }
+    const run = async () =>
+      withDatabaseLockedRetry(async () => {
+        try {
+          return await db.select<T[]>(sql, params);
+        } catch (error) {
+          throw mapSqliteError(error);
+        }
+      });
+
+    return inTransaction ? run() : runSerialized(run);
   }
 
   const adapter: Database = {
@@ -41,22 +72,24 @@ export async function openTauriDatabase(url: string): Promise<Database> {
         return work(adapter);
       }
 
-      inTransaction = true;
-      await execute("BEGIN IMMEDIATE");
-      try {
-        const result = await work(adapter);
-        await execute("COMMIT");
-        return result;
-      } catch (error) {
+      return runSerialized(async () => {
+        inTransaction = true;
+        await execute("BEGIN IMMEDIATE");
         try {
-          await execute("ROLLBACK");
-        } catch {
-          // Ignore rollback failures to preserve the original error surface.
+          const result = await work(adapter);
+          await execute("COMMIT");
+          return result;
+        } catch (error) {
+          try {
+            await execute("ROLLBACK");
+          } catch {
+            // Ignore rollback failures to preserve the original error surface.
+          }
+          throw error;
+        } finally {
+          inTransaction = false;
         }
-        throw error;
-      } finally {
-        inTransaction = false;
-      }
+      });
     },
   };
 

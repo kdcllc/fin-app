@@ -13,10 +13,39 @@ interface RecurringBillRow {
   frequency: BillFrequency;
   expected_amount_cents: number | null;
   due_day: number;
+  anchor_month: number;
+  anchor_phase: number;
   active: 0 | 1;
 }
 
-const COLUMNS = "id, payee_id, frequency, expected_amount_cents, due_day, active";
+interface RecurringSuggestionDismissalRow {
+  signature: string;
+  payee_id: number;
+  frequency: BillFrequency;
+  due_day: number;
+  expected_amount_cents: number | null;
+}
+
+function toSuggestionSignature(input: {
+  payee_id: number;
+  frequency: BillFrequency;
+  due_day: number;
+  expected_amount_cents: number | null;
+  anchor_month: number;
+  anchor_phase: number;
+}): string {
+  return [
+    input.payee_id,
+    input.frequency,
+    input.due_day,
+    input.expected_amount_cents === null ? "null" : String(input.expected_amount_cents),
+    input.anchor_month,
+    input.anchor_phase,
+  ].join("|");
+}
+
+const COLUMNS =
+  "id, payee_id, frequency, expected_amount_cents, due_day, anchor_month, anchor_phase, active";
 
 function toRecurringBill(row: RecurringBillRow): RecurringBill {
   return { ...row, active: row.active === 1 };
@@ -32,6 +61,25 @@ export interface RecurringBillsRepo {
   update(id: number, patch: RecurringBillPatch): Promise<RecurringBill | null>;
   /** Hard delete; returns false when `id` is unknown. */
   delete(id: number): Promise<boolean>;
+  /** Persist dismissal for a generated recurring-bill suggestion signature. */
+  dismissSuggestion(input: {
+    payee_id: number;
+    frequency: BillFrequency;
+    due_day: number;
+    expected_amount_cents: number | null;
+    anchor_month: number;
+    anchor_phase: number;
+  }): Promise<void>;
+  /** Load persisted suggestion dismissals for deterministic filtering. */
+  listSuggestionDismissals(): Promise<
+    Array<{
+      signature: string;
+      payee_id: number;
+      frequency: BillFrequency;
+      due_day: number;
+      expected_amount_cents: number | null;
+    }>
+  >;
 }
 
 export function createRecurringBillsRepo(db: Database): RecurringBillsRepo {
@@ -56,8 +104,15 @@ export function createRecurringBillsRepo(db: Database): RecurringBillsRepo {
 
     async insert(bill) {
       const result = await db.execute(
-        "INSERT INTO recurring_bills (payee_id, frequency, expected_amount_cents, due_day) VALUES (?, ?, ?, ?)",
-        [bill.payee_id, bill.frequency, bill.expected_amount_cents ?? null, bill.due_day],
+        "INSERT INTO recurring_bills (payee_id, frequency, expected_amount_cents, due_day, anchor_month, anchor_phase) VALUES (?, ?, ?, ?, ?, ?)",
+        [
+          bill.payee_id,
+          bill.frequency,
+          bill.expected_amount_cents ?? null,
+          bill.due_day,
+          bill.anchor_month ?? 1,
+          bill.anchor_phase ?? 1,
+        ],
       );
       const created = await get(result.lastInsertId);
       if (!created) throw new Error(`recurring_bills.insert: row ${result.lastInsertId} missing`);
@@ -72,6 +127,8 @@ export function createRecurringBillsRepo(db: Database): RecurringBillsRepo {
           frequency: patch.frequency,
           expected_amount_cents: patch.expected_amount_cents,
           due_day: patch.due_day,
+          anchor_month: patch.anchor_month,
+          anchor_phase: patch.anchor_phase,
           active: toFlag(patch.active),
         },
         id,
@@ -83,6 +140,35 @@ export function createRecurringBillsRepo(db: Database): RecurringBillsRepo {
     async delete(id) {
       const result = await db.execute("DELETE FROM recurring_bills WHERE id = ?", [id]);
       return result.rowsAffected > 0;
+    },
+
+    async dismissSuggestion(input) {
+      const signature = toSuggestionSignature(input);
+      await db.execute(
+        `INSERT OR REPLACE INTO recurring_bill_suggestion_dismissals (
+           signature,
+           payee_id,
+           frequency,
+           due_day,
+           expected_amount_cents,
+           dismissed_at
+         ) VALUES (?, ?, ?, ?, ?, datetime('now'))`,
+        [
+          signature,
+          input.payee_id,
+          input.frequency,
+          input.due_day,
+          input.expected_amount_cents,
+        ],
+      );
+    },
+
+    async listSuggestionDismissals() {
+      const rows = await db.select<RecurringSuggestionDismissalRow>(
+        `SELECT signature, payee_id, frequency, due_day, expected_amount_cents
+         FROM recurring_bill_suggestion_dismissals`,
+      );
+      return rows;
     },
   };
 }

@@ -4,6 +4,7 @@ import {
   annotateImportRowsWithDedup,
   buildPayeeProposals,
   commitReviewedImport,
+  DatabaseLockedError,
   normalizePayeeLabel,
   parsePaymentCells,
   type ImportLogEntry,
@@ -67,7 +68,14 @@ function unparsedCoordLabel(cell: Pick<UnparsedReviewCell, "sheet" | "row" | "co
   return `${cell.sheet}!R${cell.row}C${cell.col}`;
 }
 
-async function hashWorkbookPayload(payload: RawWorkbookPayload): Promise<string> {
+function toUiErrorMessage(error: unknown): string {
+  if (error instanceof DatabaseLockedError) {
+    return "Database is locked by another process or app window. Close other fin-app instances or SQLite tools using this book, then try again.";
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function hashWorkbookSemanticPayload(payload: RawWorkbookPayload): Promise<string> {
   const source = JSON.stringify(payload);
   if (typeof crypto !== "undefined" && "subtle" in crypto) {
     const bytes = new TextEncoder().encode(source);
@@ -152,7 +160,8 @@ export function ImportPage({
       }
 
       const payload = await readWorkbook(chosenPath);
-      const nextContentHash = await hashWorkbookPayload(payload);
+      const semanticPayloadHash = await hashWorkbookSemanticPayload(payload);
+      const nextContentHash = payload.fileSha256 || semanticPayloadHash;
       const priorImport = await repos.importLog.findLatestByContentHash(nextContentHash);
       const nextRows: ImportReviewRow[] = [];
       const nextUnparsed: UnparsedReviewCell[] = [];
@@ -243,7 +252,7 @@ export function ImportPage({
       setPreviousImportByHash(priorImport);
       setStep("review");
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(toUiErrorMessage(e));
     } finally {
       setLoading(false);
     }
@@ -367,7 +376,7 @@ export function ImportPage({
       );
       setStep("done");
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(toUiErrorMessage(e));
     } finally {
       setCommitting(false);
     }
@@ -415,7 +424,7 @@ export function ImportPage({
 
       {previousImportByHash !== null && (
         <p className="error">
-          Warning: this workbook content hash was imported before (import #{previousImportByHash.id} at {previousImportByHash.imported_at} from {previousImportByHash.source_file}).
+          Warning: this exact workbook file hash was imported before (import #{previousImportByHash.id} at {previousImportByHash.imported_at} from {previousImportByHash.source_file}).
         </p>
       )}
 

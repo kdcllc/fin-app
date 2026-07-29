@@ -42,7 +42,7 @@ runtime.
   `datetime('now')` defaults.
 - `archived`/`active` flags surface as booleans; repositories convert to and
   from SQLite 0/1 at the row boundary.
-- Archiving is a soft delete: archived accounts/payees drop out of default
+- Archiving is a soft delete: archived accounts/payees/categories drop out of default
   `list()` results but `get()` and payment history keep working.
 
 ## Typical use

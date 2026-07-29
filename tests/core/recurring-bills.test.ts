@@ -31,6 +31,8 @@ describe("recurring bills repository", () => {
       frequency: "monthly",
       expected_amount_cents: 12345,
       due_day: 15,
+      anchor_month: 1,
+      anchor_phase: 1,
       active: true, // schema default
     });
     expect(variable.expected_amount_cents).toBeNull();

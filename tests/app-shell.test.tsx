@@ -4,9 +4,26 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { AppSettings } from "../src/settings";
+import type { Repositories } from "../src/core";
 
 const revealItemInDirMock = vi.fn(async () => {});
-const openBookMock = vi.fn(async () => ({}) as never);
+const reposStub: Repositories = {
+  accounts: {} as Repositories["accounts"],
+  categories: {} as Repositories["categories"],
+  importLog: {} as Repositories["importLog"],
+  payees: {
+    list: vi.fn(async () => []),
+  } as Repositories["payees"],
+  payments: {
+    list: vi.fn(async () => []),
+  } as Repositories["payments"],
+  recurringBills: {
+    list: vi.fn(async () => []),
+    listSuggestionDismissals: vi.fn(async () => []),
+  } as Repositories["recurringBills"],
+  withTransaction: vi.fn(async (work: (repos: Repositories) => Promise<unknown>) => work(reposStub)),
+};
+const openBookMock = vi.fn(async () => reposStub as never);
 const dialogOpenMock = vi.fn(async () => null as string | null);
 const appConfigDirMock = vi.fn(async () => "/home/test/.config/fin-app/");
 const joinPathMock = vi.fn(async (a: string, b: string) => `${a}/${b}`);
@@ -54,6 +71,15 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
   revealItemInDir: (path: string) => revealItemInDirMock(path),
 }));
 
+vi.mock("../src/pages/PaymentsPage", () => ({
+  PaymentsPage: () => (
+    <section className="page">
+      <h1>Payments</h1>
+      <button type="button">Quick add (N)</button>
+    </section>
+  ),
+}));
+
 import App from "../src/App";
 
 describe("app shell acceptance behavior", () => {
@@ -87,6 +113,17 @@ describe("app shell acceptance behavior", () => {
 
     await user.click(screen.getByRole("button", { name: "Import" }));
     await screen.findByRole("heading", { level: 1, name: "Import" });
+  });
+
+  it("navigates to payments page", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await screen.findByRole("heading", { level: 1, name: "Dashboard" });
+
+    await user.click(screen.getByRole("button", { name: "Payments" }));
+    await screen.findByRole("heading", { level: 1, name: "Payments" });
+    expect(screen.getByRole("button", { name: "Quick add (N)" })).toBeTruthy();
   });
 
   it("first run prompts for a book location, persists the chosen path, and opens the book", async () => {

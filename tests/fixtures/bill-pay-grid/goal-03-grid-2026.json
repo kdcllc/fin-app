@@ -1,0 +1,121 @@
+{
+  "year": 2026,
+  "accounts": [
+    {
+      "key": "checking",
+      "name": "Checking",
+      "kind": "checking"
+    }
+  ],
+  "categories": [
+    {
+      "key": "utilities",
+      "name": "Utilities"
+    },
+    {
+      "key": "groceries",
+      "name": "Groceries"
+    }
+  ],
+  "payees": [
+    {
+      "key": "power",
+      "name": "Power Co",
+      "default_account": "checking",
+      "default_category": "utilities"
+    },
+    {
+      "key": "water",
+      "name": "Water Co",
+      "default_account": "checking",
+      "default_category": "utilities"
+    },
+    {
+      "key": "grocer",
+      "name": "Grocer",
+      "default_account": "checking",
+      "default_category": "groceries"
+    }
+  ],
+  "payments": [
+    {
+      "payee": "power",
+      "account": "checking",
+      "category": "utilities",
+      "date": "2026-01-10",
+      "amount_cents": 4005
+    },
+    {
+      "payee": "power",
+      "account": "checking",
+      "category": "utilities",
+      "date": "2026-01-22",
+      "amount_cents": 1000
+    },
+    {
+      "payee": "power",
+      "account": "checking",
+      "category": "utilities",
+      "date": "2026-02-05",
+      "amount_cents": 2500
+    },
+    {
+      "payee": "water",
+      "account": "checking",
+      "category": "utilities",
+      "date": "2026-02-14",
+      "amount_cents": 5000
+    }
+  ],
+  "expected": {
+    "placements": [
+      {
+        "payee": "Power Co",
+        "month": 1,
+        "labels": [
+          "01/10 $40.05",
+          "01/22 $10.00"
+        ]
+      },
+      {
+        "payee": "Power Co",
+        "month": 2,
+        "labels": [
+          "02/05 $25.00"
+        ]
+      },
+      {
+        "payee": "Water Co",
+        "month": 2,
+        "labels": [
+          "02/14 $50.00"
+        ]
+      }
+    ],
+    "row_totals": [
+      {
+        "payee": "Power Co",
+        "total_cents": 7505
+      },
+      {
+        "payee": "Water Co",
+        "total_cents": 5000
+      },
+      {
+        "payee": "Grocer",
+        "total_cents": 0
+      }
+    ],
+    "month_totals": [
+      {
+        "month": 1,
+        "total_cents": 5005
+      },
+      {
+        "month": 2,
+        "total_cents": 7500
+      }
+    ],
+    "grand_total_cents": 12505
+  }
+}

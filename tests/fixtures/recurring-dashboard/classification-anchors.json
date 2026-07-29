@@ -1,0 +1,66 @@
+{
+  "year": 2026,
+  "month": 11,
+  "as_of_date": "2026-11-20",
+  "tolerance_cents": 50,
+  "payees": [
+    { "name": "Quarterly February Phase" },
+    { "name": "Quarterly January Phase" },
+    { "name": "Annual November Renewal" },
+    { "name": "Annual January Renewal" },
+    { "name": "Monthly Control" }
+  ],
+  "recurring_bills": [
+    {
+      "payee": "Quarterly February Phase",
+      "frequency": "quarterly",
+      "expected_amount_cents": 30000,
+      "due_day": 5,
+      "anchor_month": 2,
+      "anchor_phase": 2
+    },
+    {
+      "payee": "Quarterly January Phase",
+      "frequency": "quarterly",
+      "expected_amount_cents": 30000,
+      "due_day": 5,
+      "anchor_month": 1,
+      "anchor_phase": 1
+    },
+    {
+      "payee": "Annual November Renewal",
+      "frequency": "annual",
+      "expected_amount_cents": 2400,
+      "due_day": 18,
+      "anchor_month": 11,
+      "anchor_phase": 2
+    },
+    {
+      "payee": "Annual January Renewal",
+      "frequency": "annual",
+      "expected_amount_cents": 2400,
+      "due_day": 18,
+      "anchor_month": 1,
+      "anchor_phase": 1
+    },
+    {
+      "payee": "Monthly Control",
+      "frequency": "monthly",
+      "expected_amount_cents": 1000,
+      "due_day": 25
+    }
+  ],
+  "payments": [
+    {
+      "payee": "Monthly Control",
+      "date": "2026-11-03",
+      "amount_cents": 1000
+    }
+  ],
+  "expected": {
+    "month_to_date_spent_cents": 1000,
+    "paid": ["Monthly Control"],
+    "due": [],
+    "overdue": ["Quarterly February Phase", "Annual November Renewal"]
+  }
+}

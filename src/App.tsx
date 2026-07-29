@@ -10,10 +10,22 @@ import { FirstRun } from "./FirstRun";
 import { PlaceholderPage } from "./pages/PlaceholderPage";
 import { ImportPage } from "./pages/ImportPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { EntityManagementPage } from "./pages/EntityManagementPage";
+import { PaymentsPage } from "./pages/PaymentsPage";
+import { BillsGridPage } from "./pages/BillsGridPage";
+import { DashboardPage } from "./pages/DashboardPage";
 import { loadSettings, updateSettings, type AppSettings } from "./settings";
 import "./App.css";
 
-type PageId = "dashboard" | "bills" | "payments" | "reports" | "import" | "gnucash" | "settings";
+type PageId =
+  | "dashboard"
+  | "bills"
+  | "payments"
+  | "reports"
+  | "import"
+  | "entities"
+  | "gnucash"
+  | "settings";
 
 const PAGES: { id: PageId; label: string; blurb: string }[] = [
   { id: "dashboard", label: "Dashboard", blurb: "Month-at-a-glance overview of your bills." },
@@ -21,6 +33,7 @@ const PAGES: { id: PageId; label: string; blurb: string }[] = [
   { id: "payments", label: "Payments", blurb: "Record and browse bill payments." },
   { id: "reports", label: "Reports", blurb: "Spending summaries and printable reports." },
   { id: "import", label: "Import", blurb: "Import your bill-pay spreadsheet." },
+  { id: "entities", label: "Manage Entities", blurb: "Manage payees, accounts, and categories." },
   { id: "gnucash", label: "GnuCash", blurb: "Link payments to your GnuCash book." },
   { id: "settings", label: "Settings", blurb: "" },
 ];
@@ -102,6 +115,14 @@ function App() {
       <main className="content">
         {active.id === "settings" ? (
           <SettingsPage settings={phase.settings} onUpdate={handleSettingsUpdate} />
+        ) : active.id === "dashboard" ? (
+          <DashboardPage repos={phase.repos} initialYear={phase.settings.defaultYear ?? undefined} />
+        ) : active.id === "entities" ? (
+          <EntityManagementPage repos={phase.repos} />
+        ) : active.id === "payments" ? (
+          <PaymentsPage repos={phase.repos} />
+        ) : active.id === "bills" ? (
+          <BillsGridPage repos={phase.repos} />
         ) : active.id === "import" ? (
           <ImportPage repos={phase.repos} />
         ) : (

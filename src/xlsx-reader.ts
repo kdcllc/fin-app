@@ -19,6 +19,7 @@ export type WorkbookWarning = {
 };
 
 export interface RawWorkbookPayload {
+  fileSha256: string;
   sheets: RawSheetData[];
   warnings: WorkbookWarning[];
 }

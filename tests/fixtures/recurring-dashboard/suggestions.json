@@ -1,0 +1,65 @@
+{
+  "through_date": "2026-12-31",
+  "lookback_months": 36,
+  "payees": [
+    { "name": "Gym Membership" },
+    { "name": "Estimated Taxes" },
+    { "name": "Insurance Premium" },
+    { "name": "Already Recurring" }
+  ],
+  "existing_recurring": [
+    {
+      "payee": "Already Recurring",
+      "frequency": "monthly",
+      "expected_amount_cents": 9999,
+      "due_day": 1
+    }
+  ],
+  "payments": [
+    { "payee": "Gym Membership", "date": "2026-01-03", "amount_cents": 5000 },
+    { "payee": "Gym Membership", "date": "2026-02-03", "amount_cents": 5000 },
+    { "payee": "Gym Membership", "date": "2026-03-03", "amount_cents": 5000 },
+    { "payee": "Gym Membership", "date": "2026-04-03", "amount_cents": 5000 },
+    { "payee": "Gym Membership", "date": "2026-05-03", "amount_cents": 5000 },
+    { "payee": "Gym Membership", "date": "2026-06-03", "amount_cents": 5000 },
+
+    { "payee": "Estimated Taxes", "date": "2026-01-15", "amount_cents": 15000 },
+    { "payee": "Estimated Taxes", "date": "2026-04-15", "amount_cents": 15000 },
+    { "payee": "Estimated Taxes", "date": "2026-07-15", "amount_cents": 15000 },
+    { "payee": "Estimated Taxes", "date": "2026-10-15", "amount_cents": 15000 },
+
+    { "payee": "Insurance Premium", "date": "2024-11-21", "amount_cents": 120000 },
+    { "payee": "Insurance Premium", "date": "2025-11-22", "amount_cents": 120000 },
+    { "payee": "Insurance Premium", "date": "2026-11-20", "amount_cents": 120000 },
+
+    { "payee": "Already Recurring", "date": "2026-01-07", "amount_cents": 9999 },
+    { "payee": "Already Recurring", "date": "2026-02-07", "amount_cents": 9999 },
+    { "payee": "Already Recurring", "date": "2026-03-07", "amount_cents": 9999 }
+  ],
+  "expected": [
+    {
+      "payee": "Estimated Taxes",
+      "frequency": "quarterly",
+      "due_day": 15,
+      "expected_amount_cents": 15000,
+      "anchor_month": 1,
+      "anchor_phase": 1
+    },
+    {
+      "payee": "Gym Membership",
+      "frequency": "monthly",
+      "due_day": 3,
+      "expected_amount_cents": 5000,
+      "anchor_month": 1,
+      "anchor_phase": 1
+    },
+    {
+      "payee": "Insurance Premium",
+      "frequency": "annual",
+      "due_day": 21,
+      "expected_amount_cents": 120000,
+      "anchor_month": 11,
+      "anchor_phase": 2
+    }
+  ]
+}

@@ -1,0 +1,62 @@
+{
+  "year": 2026,
+  "month": 1,
+  "as_of_date": "2026-01-20",
+  "tolerance_cents": 50,
+  "payees": [
+    { "name": "Power Co" },
+    { "name": "Water Co" },
+    { "name": "Estimated Taxes" },
+    { "name": "Domain Renewal" },
+    { "name": "Grocer" }
+  ],
+  "recurring_bills": [
+    {
+      "payee": "Power Co",
+      "frequency": "monthly",
+      "expected_amount_cents": 12000,
+      "due_day": 15
+    },
+    {
+      "payee": "Water Co",
+      "frequency": "monthly",
+      "expected_amount_cents": 8000,
+      "due_day": 5
+    },
+    {
+      "payee": "Estimated Taxes",
+      "frequency": "quarterly",
+      "expected_amount_cents": 30000,
+      "due_day": 10
+    },
+    {
+      "payee": "Domain Renewal",
+      "frequency": "annual",
+      "expected_amount_cents": 2400,
+      "due_day": 25
+    }
+  ],
+  "payments": [
+    {
+      "payee": "Power Co",
+      "date": "2026-01-14",
+      "amount_cents": 11960
+    },
+    {
+      "payee": "Water Co",
+      "date": "2026-01-07",
+      "amount_cents": 7600
+    },
+    {
+      "payee": "Grocer",
+      "date": "2026-01-09",
+      "amount_cents": 500
+    }
+  ],
+  "expected": {
+    "month_to_date_spent_cents": 20060,
+    "paid": ["Power Co"],
+    "due": ["Domain Renewal"],
+    "overdue": ["Water Co", "Estimated Taxes"]
+  }
+}

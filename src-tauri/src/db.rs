@@ -28,5 +28,17 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("../migrations/0002_prove_migration_path.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 3,
+            description: "import_idempotency",
+            sql: include_str!("../migrations/0003_import_idempotency.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 4,
+            description: "category_archiving",
+            sql: include_str!("../migrations/0004_category_archiving.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

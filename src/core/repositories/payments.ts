@@ -7,6 +7,7 @@ import type {
   XlsxPaymentIdentity,
 } from "../entities";
 import { buildUpdate } from "./helpers";
+import { resolveInsertedRow } from "./insert-verify";
 
 const COLUMNS =
   "id, payee_id, account_id, category_id, date, amount_cents, memo, source, external_ref, source_sheet, source_row, source_col, occurrence_index, created_at";
@@ -76,6 +77,59 @@ export function createPaymentsRepo(db: Database): PaymentsRepo {
   async function get(id: number): Promise<Payment | null> {
     const rows = await db.select<Payment>(`SELECT ${COLUMNS} FROM payments WHERE id = ?`, [id]);
     return rows.length > 0 ? rows[0] : null;
+  }
+
+  function matchesPayload(row: Payment, payment: NewPayment): boolean {
+    return (
+      row.payee_id === payment.payee_id &&
+      row.account_id === payment.account_id &&
+      row.category_id === (payment.category_id ?? null) &&
+      row.date === payment.date &&
+      row.amount_cents === payment.amount_cents &&
+      row.memo === (payment.memo ?? null) &&
+      row.source === payment.source &&
+      row.external_ref === (payment.external_ref ?? null) &&
+      row.source_sheet === (payment.source_sheet ?? null) &&
+      row.source_row === (payment.source_row ?? null) &&
+      row.source_col === (payment.source_col ?? null) &&
+      row.occurrence_index === (payment.occurrence_index ?? null)
+    );
+  }
+
+  async function findByPayload(payment: NewPayment): Promise<Payment[]> {
+    const rows = await db.select<Payment>(
+      `SELECT ${COLUMNS}
+       FROM payments
+       WHERE payee_id = ?
+         AND account_id = ?
+         AND category_id IS ?
+         AND date = ?
+         AND amount_cents = ?
+         AND memo IS ?
+         AND source = ?
+         AND external_ref IS ?
+         AND source_sheet IS ?
+         AND source_row IS ?
+         AND source_col IS ?
+         AND occurrence_index IS ?
+       ORDER BY id DESC
+       LIMIT 2`,
+      [
+        payment.payee_id,
+        payment.account_id,
+        payment.category_id ?? null,
+        payment.date,
+        payment.amount_cents,
+        payment.memo ?? null,
+        payment.source,
+        payment.external_ref ?? null,
+        payment.source_sheet ?? null,
+        payment.source_row ?? null,
+        payment.source_col ?? null,
+        payment.occurrence_index ?? null,
+      ],
+    );
+    return rows;
   }
 
   return {
@@ -200,9 +254,14 @@ export function createPaymentsRepo(db: Database): PaymentsRepo {
           payment.occurrence_index ?? null,
         ],
       );
-      const created = await get(result.lastInsertId);
-      if (!created) throw new Error(`payments.insert: row ${result.lastInsertId} missing`);
-      return created;
+      return resolveInsertedRow({
+        context: "payments.insert",
+        lastInsertId: result.lastInsertId,
+        payload: payment,
+        getById: get,
+        payloadMatches: matchesPayload,
+        findByPayload,
+      });
     },
 
     async update(id, patch) {

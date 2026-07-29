@@ -18,13 +18,49 @@ import {
   type ReviewedImportCommitInput,
   type ReviewedImportCommitResult,
 } from "./import-review";
+import {
+  buildQuickAddDraft,
+  createManualPayment,
+  deletePayment,
+  formatLocalIsoDate,
+  resolvePayeeDefaults,
+  updateManualPayment,
+  type ManualPaymentInput,
+  type PaymentQuickAddDraft,
+} from "./payment-entry";
+import {
+  getBillPayGridForYear,
+  type BillPayGrid,
+  type BillPayGridCell,
+  type BillPayGridCellPayment,
+  type BillPayGridMonthTotal,
+  type BillPayGridRow,
+} from "./payment-grid";
+import {
+  dismissRecurringBillSuggestion,
+  getRecurringBillSuggestions,
+  getRecurringDashboardMonth,
+  type RecurringBillSuggestion,
+  type RecurringBillStatus,
+  type RecurringDashboardItem,
+  type RecurringDashboardMonth,
+  type RecurringDashboardOptions,
+} from "./recurring-dashboard";
 import { createImportLogRepo, type ImportLogRepo } from "./repositories/import-log";
 import { createPaymentsRepo, type PaymentsRepo } from "./repositories/payments";
 import { createPayeesRepo, type PayeesRepo } from "./repositories/payees";
 import { createRecurringBillsRepo, type RecurringBillsRepo } from "./repositories/recurring-bills";
 
 export type { Database, ExecuteResult, SqlValue } from "./db";
-export { ForeignKeyViolationError, mapSqliteError } from "./errors";
+export {
+  DatabaseLockedError,
+  EntityInUseError,
+  ForeignKeyViolationError,
+  PayeeMergeError,
+  ValidationError,
+  isSqliteLockErrorMessage,
+  mapSqliteError,
+} from "./errors";
 export { parsePaymentCells } from "./cell-parser";
 export { buildPayeeProposals, normalizePayeeLabel } from "./payee-normalization";
 export type {
@@ -48,8 +84,8 @@ export type {
   PaymentSource,
   RecurringBill,
   RecurringBillPatch,
-    XlsxDedupCheckResult,
-    XlsxPaymentIdentity,
+  XlsxDedupCheckResult,
+  XlsxPaymentIdentity,
 } from "./entities";
 export type {
   AccountHint,
@@ -73,11 +109,33 @@ export type { RecurringBillsRepo } from "./repositories/recurring-bills";
 export {
   annotateImportRowsWithDedup,
   commitReviewedImport,
+  getBillPayGridForYear,
+  buildQuickAddDraft,
+  createManualPayment,
+  deletePayment,
+  formatLocalIsoDate,
+  resolvePayeeDefaults,
+  updateManualPayment,
+  getRecurringDashboardMonth,
+  getRecurringBillSuggestions,
+  dismissRecurringBillSuggestion,
 };
 export type {
+  BillPayGrid,
+  BillPayGridCell,
+  BillPayGridCellPayment,
+  BillPayGridMonthTotal,
+  BillPayGridRow,
   DuplicateDecision,
   ImportDedupState,
   ImportReviewRow,
+  ManualPaymentInput,
+  PaymentQuickAddDraft,
+  RecurringBillStatus,
+  RecurringDashboardItem,
+  RecurringDashboardMonth,
+  RecurringDashboardOptions,
+  RecurringBillSuggestion,
   ReviewedImportCommitInput,
   ReviewedImportCommitResult,
 };

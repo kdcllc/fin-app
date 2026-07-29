@@ -3,7 +3,15 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ForeignKeyViolationError } from "../../src/core";
+import {
+  ForeignKeyViolationError,
+  ValidationError,
+  getBillPayGridForYear,
+  buildQuickAddDraft,
+  createManualPayment,
+  updateManualPayment,
+  deletePayment,
+} from "../../src/core";
 import type { Payment } from "../../src/core";
 import { openTestDb, type TestDb } from "../support/test-db";
 
@@ -308,5 +316,208 @@ describe("payments repository", () => {
 
     const all = await t.repos.payments.list({ from: "2026-01-01", to: "2026-12-31" });
     expect(all).toHaveLength(3);
+  });
+
+  it("builds a quick-add draft with today date and payee defaults", async () => {
+    const defaultAccount = await t.repos.accounts.insert({ name: "Card", kind: "credit" });
+    const defaultCategory = await t.repos.categories.insert({ name: "Bills" });
+    const defaultedPayee = await t.repos.payees.insert({
+      name: "Internet Co",
+      default_account_id: defaultAccount.id,
+      default_category_id: defaultCategory.id,
+    });
+
+    const draft = await buildQuickAddDraft(t.repos, defaultedPayee.id, new Date("2026-04-12T08:30:00Z"));
+
+    expect(draft.payee_id).toBe(defaultedPayee.id);
+    expect(draft.account_id).toBe(defaultAccount.id);
+    expect(draft.category_id).toBe(defaultCategory.id);
+    expect(draft.date).toBe("2026-04-12");
+    expect(draft.amount_cents).toBeNull();
+    expect(draft.memo).toBe("");
+  });
+
+  it("persists payment overrides without mutating payee defaults", async () => {
+    const defaultedPayee = await t.repos.payees.insert({
+      name: "Water Co",
+      default_account_id: accountId,
+      default_category_id: categoryId,
+    });
+    const overrideAccount = await t.repos.accounts.insert({ name: "Rewards Card", kind: "credit" });
+    const overrideCategory = await t.repos.categories.insert({ name: "Household" });
+
+    const created = await createManualPayment(t.repos, {
+      payee_id: defaultedPayee.id,
+      account_id: overrideAccount.id,
+      category_id: overrideCategory.id,
+      date: "2026-04-13",
+      amount_cents: 12345,
+      memo: "override defaults",
+    });
+
+    expect(created.account_id).toBe(overrideAccount.id);
+    expect(created.category_id).toBe(overrideCategory.id);
+
+    const payeeAfter = await t.repos.payees.get(defaultedPayee.id);
+    expect(payeeAfter?.default_account_id).toBe(accountId);
+    expect(payeeAfter?.default_category_id).toBe(categoryId);
+  });
+
+  it("validates payee/date/amount and edit-delete flow through core payment entry API", async () => {
+    await expect(
+      createManualPayment(t.repos, {
+        payee_id: 0,
+        account_id: accountId,
+        category_id: categoryId,
+        date: "2026-04-13",
+        amount_cents: 1000,
+      }),
+    ).rejects.toThrow(ValidationError);
+
+    await expect(
+      createManualPayment(t.repos, {
+        payee_id: payeeId,
+        account_id: accountId,
+        category_id: categoryId,
+        date: "2026/04/13",
+        amount_cents: 1000,
+      }),
+    ).rejects.toThrow(ValidationError);
+
+    await expect(
+      createManualPayment(t.repos, {
+        payee_id: payeeId,
+        account_id: accountId,
+        category_id: categoryId,
+        date: "2026-04-13",
+        amount_cents: 10.25,
+      }),
+    ).rejects.toThrow(ValidationError);
+
+    const created = await createManualPayment(t.repos, {
+      payee_id: payeeId,
+      account_id: accountId,
+      category_id: categoryId,
+      date: "2026-04-13",
+      amount_cents: 2500,
+      memo: "before edit",
+    });
+
+    const updated = await updateManualPayment(t.repos, created.id, {
+      payee_id: payeeId,
+      account_id: accountId,
+      category_id: null,
+      date: "2026-04-14",
+      amount_cents: 2600,
+      memo: "after edit",
+    });
+    expect(updated).not.toBeNull();
+    expect(updated?.date).toBe("2026-04-14");
+    expect(updated?.amount_cents).toBe(2600);
+    expect(updated?.category_id).toBeNull();
+
+    expect(await deletePayment(t.repos, created.id)).toBe(true);
+    expect(await deletePayment(t.repos, created.id)).toBe(false);
+  });
+
+  it("builds deterministic payee x month placement with row and column totals", async () => {
+    const waterPayee = await t.repos.payees.insert({ name: "Water Co" });
+    const emptyPayee = await t.repos.payees.insert({ name: "Trash Co" });
+
+    await t.repos.payments.insert({
+      payee_id: payeeId,
+      account_id: accountId,
+      category_id: categoryId,
+      date: "2026-01-10",
+      amount_cents: 4005,
+      memo: "jan one",
+      source: "manual",
+    });
+    await t.repos.payments.insert({
+      payee_id: payeeId,
+      account_id: accountId,
+      category_id: categoryId,
+      date: "2026-01-22",
+      amount_cents: 1000,
+      memo: "jan two",
+      source: "manual",
+    });
+    await t.repos.payments.insert({
+      payee_id: payeeId,
+      account_id: accountId,
+      category_id: categoryId,
+      date: "2026-02-05",
+      amount_cents: 2500,
+      memo: "feb",
+      source: "manual",
+    });
+    await t.repos.payments.insert({
+      payee_id: waterPayee.id,
+      account_id: accountId,
+      category_id: categoryId,
+      date: "2026-02-14",
+      amount_cents: 5000,
+      memo: "water",
+      source: "manual",
+    });
+    await t.repos.payments.insert({
+      payee_id: waterPayee.id,
+      account_id: accountId,
+      category_id: categoryId,
+      date: "2025-12-31",
+      amount_cents: 777,
+      memo: "outside year",
+      source: "manual",
+    });
+
+    const grid = await getBillPayGridForYear(t.repos, 2026);
+
+    expect(grid.year).toBe(2026);
+    expect(grid.rows.map((row) => row.payee_name)).toEqual(["Power Co", "Trash Co", "Water Co"]);
+
+    const powerRow = grid.rows.find((row) => row.payee_id === payeeId);
+    expect(powerRow).toBeTruthy();
+    expect(powerRow?.row_total_cents).toBe(7505);
+    expect(powerRow?.cells[0].payments.map((payment) => payment.date)).toEqual([
+      "2026-01-10",
+      "2026-01-22",
+    ]);
+    expect(powerRow?.cells[1].payments.map((payment) => payment.amount_cents)).toEqual([2500]);
+
+    const emptyRow = grid.rows.find((row) => row.payee_id === emptyPayee.id);
+    expect(emptyRow).toBeTruthy();
+    expect(emptyRow?.row_total_cents).toBe(0);
+    expect(emptyRow?.cells.every((cell) => cell.total_cents === 0 && cell.payments.length === 0)).toBe(true);
+
+    const waterRow = grid.rows.find((row) => row.payee_id === waterPayee.id);
+    expect(waterRow).toBeTruthy();
+    expect(waterRow?.row_total_cents).toBe(5000);
+    expect(waterRow?.cells[1].payments.map((payment) => payment.date)).toEqual(["2026-02-14"]);
+
+    expect(grid.month_totals[0].total_cents).toBe(5005);
+    expect(grid.month_totals[1].total_cents).toBe(7500);
+    expect(grid.month_totals.slice(2).every((month) => month.total_cents === 0)).toBe(true);
+    expect(grid.grand_total_cents).toBe(12505);
+  });
+
+  it("keeps archived payees in the grid when they have in-year history", async () => {
+    const archived = await t.repos.payees.insert({ name: "Archived Payee" });
+    await t.repos.payments.insert({
+      payee_id: archived.id,
+      account_id: accountId,
+      category_id: categoryId,
+      date: "2026-03-01",
+      amount_cents: 999,
+      source: "manual",
+    });
+    await t.repos.payees.archive(archived.id);
+
+    const grid = await getBillPayGridForYear(t.repos, 2026);
+    const row = grid.rows.find((candidate) => candidate.payee_id === archived.id);
+
+    expect(row).toBeTruthy();
+    expect(row?.payee_archived).toBe(true);
+    expect(row?.row_total_cents).toBe(999);
+    expect(row?.cells[2].payments).toHaveLength(1);
   });
 });

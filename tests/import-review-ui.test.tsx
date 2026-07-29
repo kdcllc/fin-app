@@ -20,18 +20,6 @@ function loadWorkbookFixture(fileName: string): RawWorkbookPayload {
   return JSON.parse(readFileSync(path, "utf8")) as RawWorkbookPayload;
 }
 
-async function hashWorkbookPayload(payload: RawWorkbookPayload): Promise<string> {
-  const source = JSON.stringify(payload);
-  if (typeof crypto !== "undefined" && "subtle" in crypto) {
-    const bytes = new TextEncoder().encode(source);
-    const hash = await crypto.subtle.digest("SHA-256", bytes);
-    return Array.from(new Uint8Array(hash))
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("");
-  }
-  return source;
-}
-
 function reposWithInjectedCommitFailure(baseRepos: Repositories): Repositories {
   return {
     ...baseRepos,
@@ -85,6 +73,7 @@ describe("import review UI", () => {
     });
 
     readWorkbookMock.mockResolvedValue({
+      fileSha256: "file-hash-review-default",
       sheets: [
         {
           name: "2026",
@@ -171,6 +160,7 @@ describe("import review UI", () => {
 
   it("surfaces non-empty cells with missing payee labels as unresolved review items with coordinates", async () => {
     readWorkbookMock.mockResolvedValue({
+      fileSha256: "file-hash-missing-payee",
       sheets: [
         {
           name: "2026",
@@ -311,6 +301,7 @@ describe("import review UI", () => {
 
   it("shows warning when workbook content hash was previously imported", async () => {
     const workbookPayload: RawWorkbookPayload = {
+      fileSha256: "file-hash-previously-imported",
       sheets: [
         {
           name: "2026",
@@ -329,10 +320,9 @@ describe("import review UI", () => {
       warnings: [],
     };
 
-    const contentHash = await hashWorkbookPayload(workbookPayload);
     await t.repos.importLog.append({
       source_file: "/tmp/previous.xlsx",
-      content_hash: contentHash,
+      content_hash: workbookPayload.fileSha256,
       row_count: 1,
     });
 
@@ -349,12 +339,59 @@ describe("import review UI", () => {
 
     await user.click(screen.getByRole("button", { name: "Choose workbook" }));
 
-    await screen.findByText(/workbook content hash was imported before/i);
+    await screen.findByText(/exact workbook file hash was imported before/i);
     await screen.findByText(/previous\.xlsx/i);
+  });
+
+  it("does not warn when only semantic payload hash was previously imported", async () => {
+    const workbookPayload: RawWorkbookPayload = {
+      fileSha256: "bytes-hash-new-file",
+      sheets: [
+        {
+          name: "2026",
+          rows: [
+            ["Payee", "Jan"],
+            ["Power Co", "01/08 $48.58"],
+          ],
+          nonEmptyCells: [
+            { row: 1, col: 1, value: "Payee" },
+            { row: 1, col: 2, value: "Jan" },
+            { row: 2, col: 1, value: "Power Co" },
+            { row: 2, col: 2, value: "01/08 $48.58" },
+          ],
+        },
+      ],
+      warnings: [],
+    };
+
+    await t.repos.importLog.append({
+      source_file: "/tmp/semantic-only.xlsx",
+      content_hash: "semantic-payload-hash-only",
+      row_count: 1,
+    });
+
+    readWorkbookMock.mockResolvedValue(workbookPayload);
+    const user = userEvent.setup();
+
+    render(
+      <ImportPage
+        repos={t.repos}
+        pickWorkbookPath={pickWorkbookPathMock}
+        readWorkbook={readWorkbookMock}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Choose workbook" }));
+    await screen.findByText(/Editable payment rows/i);
+
+    expect(
+      screen.queryByText(/exact workbook file hash was imported before/i),
+    ).toBeNull();
   });
 
   it("surfaces workbook warnings from raw reader payload", async () => {
     readWorkbookMock.mockResolvedValue({
+      fileSha256: "file-hash-reader-warning",
       sheets: [
         {
           name: "2026",

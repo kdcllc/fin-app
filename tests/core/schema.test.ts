@@ -19,6 +19,7 @@ describe("test database schema", () => {
         "payees",
         "payments",
         "recurring_bills",
+        "recurring_bill_suggestion_dismissals",
         "import_log",
       ]),
     );
@@ -39,6 +40,11 @@ describe("test database schema", () => {
     );
     expect(xlsxIdentityIndex).toHaveLength(1);
 
+    const recurringDismissalIndex = await t.db.select<{ name: string }>(
+      "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_recurring_suggestion_dismissals_payee'",
+    );
+    expect(recurringDismissalIndex).toHaveLength(1);
+
     const paymentColumns = await t.db.select<{ name: string; type: string }>(
       "PRAGMA table_info(payments)",
     );
@@ -48,6 +54,16 @@ describe("test database schema", () => {
         expect.objectContaining({ name: "source_row", type: "INTEGER" }),
         expect.objectContaining({ name: "source_col", type: "INTEGER" }),
         expect.objectContaining({ name: "occurrence_index", type: "INTEGER" }),
+      ]),
+    );
+
+    const recurringColumns = await t.db.select<{ name: string; type: string }>(
+      "PRAGMA table_info(recurring_bills)",
+    );
+    expect(recurringColumns).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "anchor_month", type: "INTEGER" }),
+        expect.objectContaining({ name: "anchor_phase", type: "INTEGER" }),
       ]),
     );
   });

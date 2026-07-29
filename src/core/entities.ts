@@ -38,6 +38,7 @@ export interface Category {
   name: string;
   parent_id: number | null;
   gnucash_guid: string | null;
+  archived: boolean;
 }
 
 export interface NewCategory {
@@ -124,6 +125,10 @@ export interface RecurringBill {
   expected_amount_cents: number | null;
   /** Day of month, 1–31 (CHECK-enforced). */
   due_day: number;
+  /** Month anchor, 1–12 (annual schedule month and quarterly month-family source). */
+  anchor_month: number;
+  /** Quarterly anchor phase, 1–3 where 1=Jan/Apr/Jul/Oct, 2=Feb/May/Aug/Nov, 3=Mar/Jun/Sep/Dec. */
+  anchor_phase: number;
   active: boolean;
 }
 
@@ -132,6 +137,8 @@ export interface NewRecurringBill {
   frequency: BillFrequency;
   expected_amount_cents?: number | null;
   due_day: number;
+  anchor_month?: number;
+  anchor_phase?: number;
 }
 
 export type RecurringBillPatch = Partial<NewRecurringBill> & { active?: boolean };

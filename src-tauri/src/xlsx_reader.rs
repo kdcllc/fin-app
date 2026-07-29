@@ -2,10 +2,12 @@ use std::path::{Path, PathBuf};
 
 use calamine::{open_workbook, Data, Range, Reader, Xlsx};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RawWorkbookPayload {
+    pub file_sha256: String,
     pub sheets: Vec<RawSheetData>,
     pub warnings: Vec<WorkbookWarning>,
 }
@@ -63,6 +65,13 @@ pub fn read_xlsx_workbook_raw(path: String) -> Result<RawWorkbookPayload, ReadWo
         return Err(ReadWorkbookError::NonXlsx { path });
     }
 
+    let file_sha256 = compute_file_sha256(&workbook_path).map_err(|error| {
+        ReadWorkbookError::OpenFailed {
+            path: path.clone(),
+            message: format!("failed to read file bytes for hashing: {error}"),
+        }
+    })?;
+
     let mut workbook = open_workbook::<Xlsx<_>, _>(&workbook_path).map_err(|error| {
         ReadWorkbookError::OpenFailed {
             path: path.clone(),
@@ -104,7 +113,17 @@ pub fn read_xlsx_workbook_raw(path: String) -> Result<RawWorkbookPayload, ReadWo
         });
     }
 
-    Ok(RawWorkbookPayload { sheets, warnings })
+    Ok(RawWorkbookPayload {
+        file_sha256,
+        sheets,
+        warnings,
+    })
+}
+
+fn compute_file_sha256(path: &Path) -> Result<String, std::io::Error> {
+    let bytes = std::fs::read(path)?;
+    let digest = Sha256::digest(bytes);
+    Ok(format!("{digest:x}"))
 }
 
 fn has_xlsx_extension(path: &Path) -> bool {
@@ -166,8 +185,8 @@ fn cell_to_string(cell: &Data) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        extract_rows_from_matrix, is_year_sheet_name, read_xlsx_workbook_raw, RawCellData,
-        ReadWorkbookError, WorkbookWarning,
+        compute_file_sha256, extract_rows_from_matrix, is_year_sheet_name, read_xlsx_workbook_raw,
+        RawCellData, ReadWorkbookError, WorkbookWarning,
     };
     use calamine::Data;
     use std::fs;
@@ -315,6 +334,12 @@ mod tests {
 
         let payload = read_xlsx_workbook_raw(fixture.display().to_string())
             .expect("fixture workbook should load successfully");
+
+        assert_eq!(payload.file_sha256.len(), 64);
+        assert_eq!(
+            payload.file_sha256,
+            compute_file_sha256(&fixture).expect("fixture sha256 should be readable")
+        );
 
         let sheet_names = payload
             .sheets
