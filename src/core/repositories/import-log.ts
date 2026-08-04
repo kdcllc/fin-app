@@ -1,6 +1,5 @@
 import type { Database } from "../db";
 import type { ImportLogEntry, NewImportLogEntry } from "../entities";
-import { resolveInsertedRow } from "./insert-verify";
 
 const COLUMNS = "id, source_file, content_hash, imported_at, row_count";
 
@@ -22,41 +21,15 @@ export function createImportLogRepo(db: Database): ImportLogRepo {
     return rows.length > 0 ? rows[0] : null;
   }
 
-  function matchesPayload(row: ImportLogEntry, entry: NewImportLogEntry): boolean {
-    return (
-      row.source_file === entry.source_file &&
-      row.content_hash === entry.content_hash &&
-      row.row_count === entry.row_count
-    );
-  }
-
-  async function findByPayload(entry: NewImportLogEntry): Promise<ImportLogEntry[]> {
-    return db.select<ImportLogEntry>(
-      `SELECT ${COLUMNS}
-       FROM import_log
-       WHERE source_file = ?
-         AND content_hash = ?
-         AND row_count = ?
-       ORDER BY id DESC
-       LIMIT 2`,
-      [entry.source_file, entry.content_hash, entry.row_count],
-    );
-  }
-
   return {
     async append(entry) {
       const result = await db.execute(
         "INSERT INTO import_log (source_file, content_hash, row_count) VALUES (?, ?, ?)",
         [entry.source_file, entry.content_hash, entry.row_count],
       );
-      return resolveInsertedRow({
-        context: "import_log.append",
-        lastInsertId: result.lastInsertId,
-        payload: entry,
-        getById: get,
-        payloadMatches: matchesPayload,
-        findByPayload,
-      });
+      const created = await get(result.lastInsertId);
+      if (!created) throw new Error(`import_log.append: row ${result.lastInsertId} missing`);
+      return created;
     },
 
     async list() {

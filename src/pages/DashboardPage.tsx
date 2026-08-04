@@ -53,7 +53,7 @@ function toUiErrorMessage(error: unknown): string {
     return "A selected payee is no longer available. Refresh and try again.";
   }
   if (error instanceof DatabaseLockedError) {
-    return "Database is locked by another app or window. Close other database users and try again.";
+    return "Database is locked by another program — most likely an external SQLite tool (for example the sqlite3 CLI or DB Browser) has this book file open. Close it, then try again.";
   }
   return error instanceof Error ? error.message : String(error);
 }

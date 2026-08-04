@@ -21,7 +21,10 @@ const reposStub: Repositories = {
     list: vi.fn(async () => []),
     listSuggestionDismissals: vi.fn(async () => []),
   } as Repositories["recurringBills"],
-  withTransaction: vi.fn(async (work: (repos: Repositories) => Promise<unknown>) => work(reposStub)),
+  batch: vi.fn(async () => []),
+  withTransaction: vi.fn(async (work: (repos: Repositories) => Promise<unknown>) =>
+    work(reposStub),
+  ),
 };
 const openBookMock = vi.fn(async () => reposStub as never);
 const dialogOpenMock = vi.fn(async () => null as string | null);

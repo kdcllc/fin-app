@@ -139,7 +139,7 @@ Key facts from GnuCash's own documentation:
 
 - All data local (single SQLite file, user-chosen location, easy to back up/sync via Dropbox-style tools if desired).
 - Signed installers + auto-update on Windows/macOS/Linux via Tauri updater + GitHub Releases.
-- Schema migrations from day one (`tauri-plugin-sql` migrations).
+- Schema migrations from day one (`tauri-plugin-sql` migrations). _(Amended 2026-08-04: `tauri-plugin-sql` was replaced by an app-owned `rusqlite` backend with `PRAGMA user_version` migrations over the same SQL files — its sqlx connection pool broke transaction atomicity; see Goal 08, `goals/08-sqlite-backend-rework/GOAL.md`.)_
 
 ## 6. Sources
 

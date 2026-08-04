@@ -7,6 +7,8 @@ import {
   DatabaseLockedError,
   normalizePayeeLabel,
   parsePaymentCells,
+  type ImportCommitProgress,
+  type ImportCommitStage,
   type ImportLogEntry,
   type ImportReviewRow,
   type Repositories,
@@ -70,9 +72,40 @@ function unparsedCoordLabel(cell: Pick<UnparsedReviewCell, "sheet" | "row" | "co
 
 function toUiErrorMessage(error: unknown): string {
   if (error instanceof DatabaseLockedError) {
-    return "Database is locked by another process or app window. Close other fin-app instances or SQLite tools using this book, then try again.";
+    return "Database is locked by another program — most likely an external SQLite tool (for example the sqlite3 CLI or DB Browser) has this book file open. Close it, then try again.";
   }
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Commit progress is per-stage (see `ImportCommitStage`): the pre-commit
+ * stages advance a determinate step bar, while "committing" is one atomic
+ * batch with no meaningful per-row signal — it renders as indeterminate.
+ */
+const COMMIT_STAGE_STEP: Record<ImportCommitStage, number | null> = {
+  reading: 1,
+  annotating: 2,
+  building: 3,
+  committing: null,
+  done: 4,
+};
+
+const COMMIT_STAGE_STEP_MAX = 4;
+
+function commitStageLabel(progress: ImportCommitProgress): string {
+  const rowCount = progress.total_rows.toLocaleString("en-US");
+  switch (progress.stage) {
+    case "reading":
+      return "Reading existing records…";
+    case "annotating":
+      return `Checking ${rowCount} payments for duplicates…`;
+    case "building":
+      return `Preparing ${rowCount} payments…`;
+    case "committing":
+      return "Writing to database…";
+    case "done":
+      return "Import committed.";
+  }
 }
 
 async function hashWorkbookSemanticPayload(payload: RawWorkbookPayload): Promise<string> {
@@ -99,6 +132,7 @@ export function ImportPage({
   const [unparsedCells, setUnparsedCells] = useState<UnparsedReviewCell[]>([]);
   const [loading, setLoading] = useState(false);
   const [committing, setCommitting] = useState(false);
+  const [commitProgress, setCommitProgress] = useState<ImportCommitProgress | null>(null);
   const [workbookWarnings, setWorkbookWarnings] = useState<string[]>([]);
   const [previousImportByHash, setPreviousImportByHash] = useState<ImportLogEntry | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -364,11 +398,13 @@ export function ImportPage({
     setError(null);
     setStatusMessage(null);
     setCommitting(true);
+    setCommitProgress(null);
     try {
       const result = await commitReviewedImport(repos, {
         source_file: filePath,
         content_hash: contentHash,
         rows,
+        on_progress: setCommitProgress,
       });
 
       setStatusMessage(
@@ -379,6 +415,7 @@ export function ImportPage({
       setError(toUiErrorMessage(e));
     } finally {
       setCommitting(false);
+      setCommitProgress(null);
     }
   }
 
@@ -415,6 +452,21 @@ export function ImportPage({
           {committing ? "Committing…" : "Commit import"}
         </button>
       </div>
+
+      {committing && commitProgress !== null && (
+        <div className="import-commit-progress" role="status">
+          {COMMIT_STAGE_STEP[commitProgress.stage] === null ? (
+            <progress aria-label="Commit progress" />
+          ) : (
+            <progress
+              aria-label="Commit progress"
+              value={COMMIT_STAGE_STEP[commitProgress.stage] ?? 0}
+              max={COMMIT_STAGE_STEP_MAX}
+            />
+          )}
+          <span>{commitStageLabel(commitProgress)}</span>
+        </div>
+      )}
 
       {filePath && (
         <p>

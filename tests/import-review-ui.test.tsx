@@ -23,26 +23,18 @@ function loadWorkbookFixture(fileName: string): RawWorkbookPayload {
 function reposWithInjectedCommitFailure(baseRepos: Repositories): Repositories {
   return {
     ...baseRepos,
-    withTransaction<T>(work: (repos: Repositories) => Promise<T>): Promise<T> {
-      return baseRepos.withTransaction(async (txRepos) => {
-        let insertCount = 0;
-        const wrappedTx: Repositories = {
-          ...txRepos,
-          payments: {
-            ...txRepos.payments,
-            async insert(input) {
-              const inserted = await txRepos.payments.insert(input);
-              insertCount += 1;
-              if (insertCount >= 1) {
-                throw new Error("injected failure after payment insert");
-              }
-              return inserted;
-            },
-          },
-        };
-
-        return work(wrappedTx);
+    // Poison the commit batch right after its first payment INSERT: the
+    // whole batch must roll back, leaving every table unchanged.
+    batch(statements) {
+      const firstPaymentInsert = statements.findIndex((statement) =>
+        statement.sql.trimStart().startsWith("INSERT INTO payments"),
+      );
+      const poisoned = [...statements];
+      poisoned.splice(firstPaymentInsert + 1, 0, {
+        sql: 'INSERT INTO "injected failure after payment insert" DEFAULT VALUES',
+        params: [],
       });
+      return baseRepos.batch(poisoned);
     },
   };
 }
@@ -112,7 +104,7 @@ describe("import review UI", () => {
         repos={t.repos}
         pickWorkbookPath={pickWorkbookPathMock}
         readWorkbook={readWorkbookMock}
-      />, 
+      />,
     );
 
     const countsBefore = {
@@ -235,7 +227,9 @@ describe("import review UI", () => {
 
     await user.click(commitButton);
 
-    await screen.findByText(/Imported 1 rows \(0 exact duplicates skipped, 1 potential duplicates skipped\)/i);
+    await screen.findByText(
+      /Imported 1 rows \(0 exact duplicates skipped, 1 potential duplicates skipped\)/i,
+    );
 
     const payments = await t.repos.payments.list({ from: "2026-01-01", to: "2026-12-31" });
     expect(payments).toHaveLength(2);
@@ -297,6 +291,101 @@ describe("import review UI", () => {
       expect(await tableCount("payments")).toBe(countsBefore.payments);
       expect(await tableCount("import_log")).toBe(countsBefore.importLog);
     });
+  });
+
+  it("renders an error state on commit failure: no success message, review rows editable for retry", async () => {
+    readWorkbookMock.mockResolvedValue(loadWorkbookFixture("import-review-ui-happy-path.json"));
+
+    const user = userEvent.setup();
+    render(
+      <ImportPage
+        repos={reposWithInjectedCommitFailure(t.repos)}
+        pickWorkbookPath={pickWorkbookPathMock}
+        readWorkbook={readWorkbookMock}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Choose workbook" }));
+    await screen.findByText(/unparsed cell\(s\) must be fixed or skipped/i);
+
+    await user.click(screen.getByRole("button", { name: "Skip cell" }));
+    await user.selectOptions(screen.getByRole("combobox"), "keep");
+
+    const commitButton = screen.getByRole("button", { name: "Commit import" });
+    await waitFor(() => {
+      expect((commitButton as HTMLButtonElement).disabled).toBe(false);
+    });
+
+    await user.click(commitButton);
+    await screen.findByText(/injected failure after payment insert/i);
+
+    // No success message and the review state is not cleared.
+    expect(screen.queryByText(/^Imported \d/)).toBeNull();
+    const payeeInputs = screen.getAllByDisplayValue("Power Co") as HTMLInputElement[];
+    expect(payeeInputs).toHaveLength(2);
+    for (const input of payeeInputs) {
+      expect(input.disabled).toBe(false);
+    }
+
+    // Rows remain editable: an edit sticks and commit can be retried.
+    await user.clear(payeeInputs[0]);
+    await user.type(payeeInputs[0], "Power Co LLC");
+    expect(payeeInputs[0].value).toBe("Power Co LLC");
+    await waitFor(() => {
+      expect((commitButton as HTMLButtonElement).disabled).toBe(false);
+    });
+  });
+
+  it("shows stage-based commit progress with an indeterminate bar during the atomic write", async () => {
+    readWorkbookMock.mockResolvedValue(loadWorkbookFixture("import-review-ui-happy-path.json"));
+
+    // Hold the atomic batch open so the "committing" stage is observable.
+    let releaseBatch: () => void = () => {};
+    const batchGate = new Promise<void>((resolve) => {
+      releaseBatch = resolve;
+    });
+    const gatedRepos: Repositories = {
+      ...t.repos,
+      async batch(statements) {
+        await batchGate;
+        return t.repos.batch(statements);
+      },
+    };
+
+    const user = userEvent.setup();
+    render(
+      <ImportPage
+        repos={gatedRepos}
+        pickWorkbookPath={pickWorkbookPathMock}
+        readWorkbook={readWorkbookMock}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Choose workbook" }));
+    await screen.findByText(/unparsed cell\(s\) must be fixed or skipped/i);
+
+    await user.click(screen.getByRole("button", { name: "Skip cell" }));
+    await user.selectOptions(screen.getByRole("combobox"), "keep");
+
+    const commitButton = screen.getByRole("button", { name: "Commit import" });
+    await waitFor(() => {
+      expect((commitButton as HTMLButtonElement).disabled).toBe(false);
+    });
+
+    await user.click(commitButton);
+
+    // Single atomic batch in flight: stage label plus an indeterminate
+    // progress bar — no fabricated per-row progress.
+    await screen.findByText("Writing to database…");
+    const bar = screen.getByRole("progressbar", { name: "Commit progress" });
+    expect(bar.hasAttribute("value")).toBe(false);
+
+    releaseBatch();
+
+    await screen.findByText(
+      /Imported 2 rows \(0 exact duplicates skipped, 0 potential duplicates skipped\)/i,
+    );
+    expect(screen.queryByText("Writing to database…")).toBeNull();
   });
 
   it("shows warning when workbook content hash was previously imported", async () => {
@@ -384,9 +473,7 @@ describe("import review UI", () => {
     await user.click(screen.getByRole("button", { name: "Choose workbook" }));
     await screen.findByText(/Editable payment rows/i);
 
-    expect(
-      screen.queryByText(/exact workbook file hash was imported before/i),
-    ).toBeNull();
+    expect(screen.queryByText(/exact workbook file hash was imported before/i)).toBeNull();
   });
 
   it("surfaces workbook warnings from raw reader payload", async () => {

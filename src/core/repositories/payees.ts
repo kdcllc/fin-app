@@ -1,7 +1,6 @@
 import type { Database } from "../db";
 import type { NewPayee, Payee, PayeePatch } from "../entities";
 import { EntityInUseError, PayeeMergeError, ValidationError } from "../errors";
-import { resolveInsertedRow } from "./insert-verify";
 import { buildUpdate } from "./helpers";
 
 interface PayeeRow {
@@ -66,35 +65,6 @@ export function createPayeesRepo(db: Database): PayeesRepo {
     return rows[0]?.count ?? 0;
   }
 
-  function matchesPayload(row: Payee, payee: NewPayee): boolean {
-    return (
-      row.name === payee.name &&
-      row.default_category_id === (payee.default_category_id ?? null) &&
-      row.default_account_id === (payee.default_account_id ?? null) &&
-      row.notes === (payee.notes ?? null)
-    );
-  }
-
-  async function findByPayload(payee: NewPayee): Promise<Payee[]> {
-    const rows = await db.select<PayeeRow>(
-      `SELECT ${COLUMNS}
-       FROM payees
-       WHERE name = ?
-         AND default_category_id IS ?
-         AND default_account_id IS ?
-         AND notes IS ?
-       ORDER BY id DESC
-       LIMIT 2`,
-      [
-        payee.name,
-        payee.default_category_id ?? null,
-        payee.default_account_id ?? null,
-        payee.notes ?? null,
-      ],
-    );
-    return rows.map(toPayee);
-  }
-
   return {
     async list({ includeArchived = false } = {}) {
       const where = includeArchived ? "" : " WHERE archived = 0";
@@ -117,14 +87,9 @@ export function createPayeesRepo(db: Database): PayeesRepo {
           payee.notes ?? null,
         ],
       );
-      return resolveInsertedRow({
-        context: "payees.insert",
-        lastInsertId: result.lastInsertId,
-        payload: payee,
-        getById: get,
-        payloadMatches: matchesPayload,
-        findByPayload,
-      });
+      const created = await get(result.lastInsertId);
+      if (!created) throw new Error(`payees.insert: row ${result.lastInsertId} missing`);
+      return created;
     },
 
     async update(id, patch) {

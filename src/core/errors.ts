@@ -69,8 +69,8 @@ export function isSqliteLockErrorMessage(message: string): boolean {
 
 /**
  * Map a raw driver error to a typed core error. Both SQLite drivers used by
- * this app (sqlx via tauri-plugin-sql, and better-sqlite3 in tests) include
- * the canonical SQLite message text "FOREIGN KEY constraint failed".
+ * this app (rusqlite in the Rust backend, and better-sqlite3 in tests)
+ * include the canonical SQLite message text "FOREIGN KEY constraint failed".
  */
 export function mapSqliteError(error: unknown): Error {
   const message = error instanceof Error ? error.message : String(error);

@@ -2,7 +2,7 @@
 
 Derived from [docs/RESEARCH.md](../docs/RESEARCH.md). Each goal lives in its own folder with a `GOAL.md` (objective, success criteria, dependencies) and a `tasks/` folder with one file per task.
 
-**Stack (per research):** Tauri 2.x · React + TypeScript · SQLite (`tauri-plugin-sql` with migrations) · ECharts · `calamine` / `rust_xlsxwriter` for xlsx · Tauri updater + GitHub Releases.
+**Stack (per research):** Tauri 2.x · React + TypeScript · SQLite (app-owned `rusqlite` backend with `user_version` migrations — replaced `tauri-plugin-sql` in Goal 08) · ECharts · `calamine` / `rust_xlsxwriter` for xlsx · Tauri updater + GitHub Releases.
 
 | # | Goal | Milestone | Depends on |
 |---|------|-----------|------------|
@@ -13,6 +13,7 @@ Derived from [docs/RESEARCH.md](../docs/RESEARCH.md). Each goal lives in its own
 | 05 | [GnuCash read integration + QIF export](05-gnucash-read/GOAL.md) | v0.3 | 03 |
 | 06 | [GnuCash direct write (guarded)](06-gnucash-write/GOAL.md) | v0.4 | 05 |
 | 07 | [Distribution & auto-update](07-distribution/GOAL.md) | release | 01 |
+| 08 | [SQLite backend rework (persistence & import speed)](08-sqlite-backend-rework/GOAL.md) | v0.1 | 01, 02 |
 
 ## Status convention
 

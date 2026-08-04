@@ -6,13 +6,15 @@
  * the `no-restricted-imports` rule in eslint.config.js). All SQL lives inside
  * this package; UI components never issue queries. See src/core/README.md.
  */
-import type { Database } from "./db";
+import type { BatchStatement, Database, ExecuteResult } from "./db";
 import { createAccountsRepo, type AccountsRepo } from "./repositories/accounts";
 import { createCategoriesRepo, type CategoriesRepo } from "./repositories/categories";
 import {
   annotateImportRowsWithDedup,
   commitReviewedImport,
   type DuplicateDecision,
+  type ImportCommitProgress,
+  type ImportCommitStage,
   type ImportDedupState,
   type ImportReviewRow,
   type ReviewedImportCommitInput,
@@ -51,7 +53,7 @@ import { createPaymentsRepo, type PaymentsRepo } from "./repositories/payments";
 import { createPayeesRepo, type PayeesRepo } from "./repositories/payees";
 import { createRecurringBillsRepo, type RecurringBillsRepo } from "./repositories/recurring-bills";
 
-export type { Database, ExecuteResult, SqlValue } from "./db";
+export type { BatchStatement, Database, ExecuteResult, SqlValue } from "./db";
 export {
   DatabaseLockedError,
   EntityInUseError,
@@ -84,8 +86,7 @@ export type {
   PaymentSource,
   RecurringBill,
   RecurringBillPatch,
-  XlsxDedupCheckResult,
-  XlsxPaymentIdentity,
+  XlsxBusinessKey,
 } from "./entities";
 export type {
   AccountHint,
@@ -127,6 +128,8 @@ export type {
   BillPayGridMonthTotal,
   BillPayGridRow,
   DuplicateDecision,
+  ImportCommitProgress,
+  ImportCommitStage,
   ImportDedupState,
   ImportReviewRow,
   ManualPaymentInput,
@@ -139,7 +142,7 @@ export type {
   ReviewedImportCommitInput,
   ReviewedImportCommitResult,
 };
-export { openTauriDatabase } from "./adapters/tauri-sql";
+export { openRustSqliteDatabase } from "./adapters/rust-sqlite";
 
 /** Every repository, wired to one database connection. */
 export interface Repositories {
@@ -149,6 +152,12 @@ export interface Repositories {
   payees: PayeesRepo;
   payments: PaymentsRepo;
   recurringBills: RecurringBillsRepo;
+  /**
+   * Run a prebuilt statement list as ONE atomic SQLite transaction in a
+   * single round trip — the import-commit path. Must not be called inside
+   * `withTransaction` (SQLite cannot nest transactions).
+   */
+  batch(statements: BatchStatement[]): Promise<ExecuteResult[]>;
   /** Execute repository operations atomically in one transaction. */
   withTransaction<T>(work: (repos: Repositories) => Promise<T>): Promise<T>;
 }
@@ -163,6 +172,9 @@ export function createRepositories(db: Database): Repositories {
       payees: createPayeesRepo(database),
       payments: createPaymentsRepo(database),
       recurringBills: createRecurringBillsRepo(database),
+      batch(statements: BatchStatement[]): Promise<ExecuteResult[]> {
+        return database.batch(statements);
+      },
       withTransaction<T>(work: (repos: Repositories) => Promise<T>): Promise<T> {
         return database.transaction((txDb) => work(wire(txDb)));
       },

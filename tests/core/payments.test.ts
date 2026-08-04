@@ -1,8 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import {
   ForeignKeyViolationError,
   ValidationError,
@@ -14,27 +10,6 @@ import {
 } from "../../src/core";
 import type { Payment } from "../../src/core";
 import { openTestDb, type TestDb } from "../support/test-db";
-
-const FIXTURES_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../fixtures/excel");
-
-type XlsxImportFixture = {
-  source_file: string;
-  candidates: Array<{
-    date: string;
-    amount_cents: number;
-    source_sheet: string;
-    source_row: number;
-    source_col: number;
-    occurrence_index: number;
-  }>;
-};
-
-function loadXlsxImportFixture(fileName: string): { hash: string; fixture: XlsxImportFixture } {
-  const bytes = readFileSync(resolve(FIXTURES_DIR, fileName));
-  const fixture = JSON.parse(bytes.toString("utf8")) as XlsxImportFixture;
-  const hash = createHash("sha256").update(bytes).digest("hex");
-  return { hash, fixture };
-}
 
 describe("payments repository", () => {
   let t: TestDb;
@@ -149,8 +124,8 @@ describe("payments repository", () => {
     );
   });
 
-  it("flags xlsx business-field collisions as potential duplicates", async () => {
-    const existing = await t.repos.payments.insert({
+  it("fetches all xlsx payments matching any business-key tuple in one query pass", async () => {
+    const collision = await t.repos.payments.insert({
       payee_id: payeeId,
       account_id: accountId,
       category_id: categoryId,
@@ -162,26 +137,7 @@ describe("payments repository", () => {
       source_col: 2,
       occurrence_index: 1,
     });
-
-    const dedup = await t.repos.payments.checkXlsxDedup({
-      payee_id: payeeId,
-      account_id: accountId,
-      date: "2026-02-15",
-      amount_cents: 4058,
-      source_sheet: "2026",
-      source_row: 12,
-      source_col: 3,
-      occurrence_index: 1,
-    });
-
-    expect(dedup.kind).toBe("potential_duplicate");
-    if (dedup.kind === "potential_duplicate") {
-      expect(dedup.matches.map((p) => p.id)).toEqual([existing.id]);
-    }
-  });
-
-  it("treats identical xlsx identity as exact duplicate", async () => {
-    const existing = await t.repos.payments.insert({
+    const exact = await t.repos.payments.insert({
       payee_id: payeeId,
       account_id: accountId,
       category_id: categoryId,
@@ -193,19 +149,53 @@ describe("payments repository", () => {
       source_col: 4,
       occurrence_index: 1,
     });
+    // Same business fields but manual source — must NOT participate in xlsx dedup.
+    await pay("2026-02-15", 4058);
 
-    const dedup = await t.repos.payments.checkXlsxDedup({
+    const before = t.calls.length;
+    const matches = await t.repos.payments.listXlsxByBusinessKeys([
+      { payee_id: payeeId, account_id: accountId, date: "2026-02-15", amount_cents: 4058 },
+      { payee_id: payeeId, account_id: accountId, date: "2026-03-01", amount_cents: 5000 },
+      // Duplicate tuple and a miss — dedup'd and harmless.
+      { payee_id: payeeId, account_id: accountId, date: "2026-03-01", amount_cents: 5000 },
+      { payee_id: payeeId, account_id: accountId, date: "2026-12-31", amount_cents: 1 },
+    ]);
+
+    expect(matches.map((p) => p.id)).toEqual([collision.id, exact.id]);
+    expect(t.calls.slice(before).filter((call) => call.kind === "select")).toHaveLength(1);
+  });
+
+  it("chunks large business-key lists and returns an empty result for no keys", async () => {
+    const seeded = await t.repos.payments.insert({
       payee_id: payeeId,
       account_id: accountId,
-      date: "2026-03-01",
-      amount_cents: 5000,
+      category_id: categoryId,
+      date: "2026-06-15",
+      amount_cents: 7777,
+      source: "xlsx",
       source_sheet: "2026",
-      source_row: 20,
-      source_col: 4,
+      source_row: 30,
+      source_col: 7,
       occurrence_index: 1,
     });
 
-    expect(dedup).toEqual({ kind: "exact_duplicate", existing });
+    // 250 unique keys; only the last one matches the seeded payment.
+    const keys = Array.from({ length: 249 }, (_, index) => ({
+      payee_id: payeeId,
+      account_id: accountId,
+      date: "2026-06-01",
+      amount_cents: 100000 + index,
+    }));
+    keys.push({ payee_id: payeeId, account_id: accountId, date: "2026-06-15", amount_cents: 7777 });
+
+    const before = t.calls.length;
+    const matches = await t.repos.payments.listXlsxByBusinessKeys(keys);
+    expect(matches.map((p) => p.id)).toEqual([seeded.id]);
+    expect(t.calls.slice(before).filter((call) => call.kind === "select")).toHaveLength(3);
+
+    const beforeEmpty = t.calls.length;
+    expect(await t.repos.payments.listXlsxByBusinessKeys([])).toEqual([]);
+    expect(t.calls.slice(beforeEmpty)).toHaveLength(0);
   });
 
   it("rejects invalid xlsx writes before hitting sqlite", async () => {
@@ -242,82 +232,6 @@ describe("payments repository", () => {
     );
   });
 
-  it("supports deterministic re-import: same file no-op, one-new-cell variant inserts one row", async () => {
-    type Candidate = {
-      payee_id: number;
-      account_id: number;
-      category_id: number;
-      date: string;
-      amount_cents: number;
-      source_sheet: string;
-      source_row: number;
-      source_col: number;
-      occurrence_index: number;
-    };
-
-    async function applyImport(contentHash: string, sourceFile: string, candidates: Candidate[]) {
-      const prior = await t.repos.importLog.findLatestByContentHash(contentHash);
-      const created: Payment[] = [];
-      for (const candidate of candidates) {
-        const dedup = await t.repos.payments.checkXlsxDedup(candidate);
-        if (dedup.kind === "new") {
-          created.push(
-            await t.repos.payments.insert({
-              ...candidate,
-              source: "xlsx",
-            }),
-          );
-        }
-      }
-
-      await t.repos.importLog.append({
-        source_file: sourceFile,
-        content_hash: contentHash,
-        row_count: candidates.length,
-      });
-
-      return {
-        alreadyImported: prior !== null,
-        created,
-      };
-    }
-
-    const base = loadXlsxImportFixture("base.json");
-    const baseCandidates: Candidate[] = base.fixture.candidates.map((candidate) => ({
-      ...candidate,
-      payee_id: payeeId,
-      account_id: accountId,
-      category_id: categoryId,
-    }));
-
-    const first = await applyImport(base.hash, base.fixture.source_file, baseCandidates);
-    expect(first.alreadyImported).toBe(false);
-    expect(first.created).toHaveLength(2);
-
-    const second = await applyImport(base.hash, base.fixture.source_file, baseCandidates);
-    expect(second.alreadyImported).toBe(true);
-    expect(second.created).toHaveLength(0);
-
-    const oneCellExtended = loadXlsxImportFixture("one-cell-extended.json");
-    const oneNewCell: Candidate[] = oneCellExtended.fixture.candidates.map((candidate) => ({
-      ...candidate,
-      payee_id: payeeId,
-      account_id: accountId,
-      category_id: categoryId,
-    }));
-
-    const third = await applyImport(
-      oneCellExtended.hash,
-      oneCellExtended.fixture.source_file,
-      oneNewCell,
-    );
-    expect(third.alreadyImported).toBe(false);
-    expect(third.created).toHaveLength(1);
-
-    const all = await t.repos.payments.list({ from: "2026-01-01", to: "2026-12-31" });
-    expect(all).toHaveLength(3);
-  });
-
   it("builds a quick-add draft with today date and payee defaults", async () => {
     const defaultAccount = await t.repos.accounts.insert({ name: "Card", kind: "credit" });
     const defaultCategory = await t.repos.categories.insert({ name: "Bills" });
@@ -327,7 +241,11 @@ describe("payments repository", () => {
       default_category_id: defaultCategory.id,
     });
 
-    const draft = await buildQuickAddDraft(t.repos, defaultedPayee.id, new Date("2026-04-12T08:30:00Z"));
+    const draft = await buildQuickAddDraft(
+      t.repos,
+      defaultedPayee.id,
+      new Date("2026-04-12T08:30:00Z"),
+    );
 
     expect(draft.payee_id).toBe(defaultedPayee.id);
     expect(draft.account_id).toBe(defaultAccount.id);
@@ -487,7 +405,9 @@ describe("payments repository", () => {
     const emptyRow = grid.rows.find((row) => row.payee_id === emptyPayee.id);
     expect(emptyRow).toBeTruthy();
     expect(emptyRow?.row_total_cents).toBe(0);
-    expect(emptyRow?.cells.every((cell) => cell.total_cents === 0 && cell.payments.length === 0)).toBe(true);
+    expect(
+      emptyRow?.cells.every((cell) => cell.total_cents === 0 && cell.payments.length === 0),
+    ).toBe(true);
 
     const waterRow = grid.rows.find((row) => row.payee_id === waterPayee.id);
     expect(waterRow).toBeTruthy();

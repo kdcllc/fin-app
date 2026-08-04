@@ -3,62 +3,11 @@ mod xlsx_reader;
 
 use std::fs::OpenOptions;
 use std::path::Path;
-use std::path::PathBuf;
-use std::sync::Mutex;
-
-use tauri::{AppHandle, State};
-
-/// The `sqlite:` URL of the book registered with the SQL plugin this session,
-/// if any. The plugin keys migrations by exact URL string, so registration
-/// happens at runtime — once the user-chosen absolute book path is known —
-/// rather than at builder time with a fixed default URL.
-struct RegisteredBook(Mutex<Option<String>>);
-
-/// Register the SQL plugin for the book at `path` (an absolute path to the
-/// SQLite file) and return the `sqlite:` URL the frontend must pass to
-/// `Database.load`. The plugin applies pending migrations when that URL is
-/// loaded. Idempotent for the same path; switching paths requires a restart.
-#[tauri::command]
-fn register_book(
-    app: AppHandle,
-    registered: State<'_, RegisteredBook>,
-    path: String,
-) -> Result<String, String> {
-    let book_path = PathBuf::from(&path);
-    if !book_path.is_absolute() {
-        return Err(format!("book path must be absolute, got: {path}"));
-    }
-    let url = format!("sqlite:{path}");
-
-    let mut slot = registered.0.lock().expect("RegisteredBook mutex poisoned");
-    if let Some(existing) = slot.as_deref() {
-        if existing == url {
-            return Ok(url);
-        }
-        return Err(format!(
-            "a book is already registered this session ({existing}); restart the app to switch books"
-        ));
-    }
-
-    // Materialize the selected book path now so first-run behavior has
-    // direct, deterministic file-creation semantics.
-    materialize_book_file(&book_path)?;
-
-    app.plugin(
-        tauri_plugin_sql::Builder::new()
-            .add_migrations(&url, db::migrations())
-            .build(),
-    )
-    .map_err(|e| format!("failed to initialize the SQL plugin: {e}"))?;
-
-    *slot = Some(url.clone());
-    Ok(url)
-}
 
 /// Ensure the selected book path can be opened as a SQLite file.
 ///
 /// Creates parent folders as needed and creates the file when missing.
-fn materialize_book_file(book_path: &Path) -> Result<(), String> {
+pub(crate) fn materialize_book_file(book_path: &Path) -> Result<(), String> {
     if let Some(parent) = book_path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("cannot create book folder {}: {e}", parent.display()))?;
@@ -81,9 +30,12 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())
-        .manage(RegisteredBook(Mutex::new(None)))
+        .manage(db::OpenBookState::new())
         .invoke_handler(tauri::generate_handler![
-            register_book,
+            db::open_book,
+            db::db_select,
+            db::db_execute,
+            db::db_batch,
             xlsx_reader::read_xlsx_workbook_raw
         ])
         .run(tauri::generate_context!())

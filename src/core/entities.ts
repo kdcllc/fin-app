@@ -158,26 +158,16 @@ export interface NewImportLogEntry {
   row_count: number;
 }
 
-export interface XlsxPaymentIdentity {
+/**
+ * Business-key tuple for xlsx import dedup: two xlsx payments with the same
+ * tuple are duplicates of some kind (exact when source coordinates also
+ * match, potential otherwise).
+ */
+export interface XlsxBusinessKey {
   payee_id: number;
   account_id: number;
+  /** ISO date `YYYY-MM-DD`. */
   date: string;
+  /** Integer cents — never a float. */
   amount_cents: number;
-  source_sheet: string;
-  source_row: number;
-  source_col: number;
-  occurrence_index: number;
 }
-
-export type XlsxDedupCheckResult =
-  | {
-      kind: "new";
-    }
-  | {
-      kind: "exact_duplicate";
-      existing: Payment;
-    }
-  | {
-      kind: "potential_duplicate";
-      matches: Payment[];
-    };

@@ -163,12 +163,12 @@ function createMockRepos(): Repositories {
     },
     payments: {
       async list(filter: Parameters<Repositories["payments"]["list"]>[0]) {
-        const rows = payments.filter(
-          (row) => row.date >= filter.from && row.date <= filter.to,
-        );
+        const rows = payments.filter((row) => row.date >= filter.from && row.date <= filter.to);
         return rows.map(clonePayment);
       },
-      async checkXlsxDedup(_identity: Parameters<Repositories["payments"]["checkXlsxDedup"]>[0]) {
+      async listXlsxByBusinessKeys(
+        _keys: Parameters<Repositories["payments"]["listXlsxByBusinessKeys"]>[0],
+      ) {
         throw new Error("not used in this test");
       },
       async get(id: number) {
@@ -202,7 +202,8 @@ function createMockRepos(): Repositories {
         payments[index] = {
           ...payments[index],
           ...patch,
-          category_id: patch.category_id === undefined ? payments[index].category_id : patch.category_id,
+          category_id:
+            patch.category_id === undefined ? payments[index].category_id : patch.category_id,
           memo: patch.memo === undefined ? payments[index].memo : patch.memo,
         };
         return clonePayment(payments[index]);
@@ -250,7 +251,9 @@ describe("PaymentsPage", () => {
       expect((payeeSelect as HTMLSelectElement).value).toBe("1");
       expect((screen.getByLabelText("Account") as HTMLSelectElement).value).toBe("1");
       expect((screen.getByLabelText("Category") as HTMLSelectElement).value).toBe("1");
-      expect((screen.getByLabelText("Date") as HTMLInputElement).value).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect((screen.getByLabelText("Date") as HTMLInputElement).value).toMatch(
+        /^\d{4}-\d{2}-\d{2}$/,
+      );
     });
 
     await user.selectOptions(payeeSelect, "2");
@@ -292,7 +295,8 @@ describe("PaymentsPage", () => {
     await screen.findByText("Payment saved.");
 
     const rowsAfterSave = screen.getAllByRole("row");
-    const newRow = rowsAfterSave.find((row) => within(row).queryByText("new payment") !== null) ?? null;
+    const newRow =
+      rowsAfterSave.find((row) => within(row).queryByText("new payment") !== null) ?? null;
     expect(newRow).toBeTruthy();
 
     await user.click(within(newRow as HTMLElement).getByRole("button", { name: "Edit" }));
@@ -305,7 +309,8 @@ describe("PaymentsPage", () => {
     expect(screen.getByText("41.05")).toBeTruthy();
 
     const rowsAfterEdit = screen.getAllByRole("row");
-    const editedRow = rowsAfterEdit.find((row) => within(row).queryByText("new payment") !== null) ?? null;
+    const editedRow =
+      rowsAfterEdit.find((row) => within(row).queryByText("new payment") !== null) ?? null;
     expect(editedRow).toBeTruthy();
     await user.click(within(editedRow as HTMLElement).getByRole("button", { name: "Delete" }));
 
@@ -338,9 +343,15 @@ describe("PaymentsPage", () => {
     const payeeSelect = await screen.findByLabelText("Payee");
     await waitFor(() => {
       expect((payeeSelect as HTMLSelectElement).value).toBe(String(powerCo.id));
-      expect((screen.getByLabelText("Account") as HTMLSelectElement).value).toBe(String(checking.id));
-      expect((screen.getByLabelText("Category") as HTMLSelectElement).value).toBe(String(utilities.id));
-      expect((screen.getByLabelText("Date") as HTMLInputElement).value).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect((screen.getByLabelText("Account") as HTMLSelectElement).value).toBe(
+        String(checking.id),
+      );
+      expect((screen.getByLabelText("Category") as HTMLSelectElement).value).toBe(
+        String(utilities.id),
+      );
+      expect((screen.getByLabelText("Date") as HTMLInputElement).value).toMatch(
+        /^\d{4}-\d{2}-\d{2}$/,
+      );
     });
 
     await user.keyboard("{Tab}");

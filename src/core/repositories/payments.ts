@@ -1,16 +1,12 @@
 import type { Database, SqlValue } from "../db";
-import type {
-  NewPayment,
-  Payment,
-  PaymentPatch,
-  XlsxDedupCheckResult,
-  XlsxPaymentIdentity,
-} from "../entities";
+import type { NewPayment, Payment, PaymentPatch, XlsxBusinessKey } from "../entities";
 import { buildUpdate } from "./helpers";
-import { resolveInsertedRow } from "./insert-verify";
 
 const COLUMNS =
   "id, payee_id, account_id, category_id, date, amount_cents, memo, source, external_ref, source_sheet, source_row, source_col, occurrence_index, created_at";
+
+/** 4 bound params per key; 100 keys stays far below SQLite's variable limit. */
+const BUSINESS_KEY_CHUNK_SIZE = 100;
 
 export interface PaymentFilter {
   /** Inclusive ISO date lower bound (`YYYY-MM-DD`). */
@@ -30,11 +26,13 @@ export interface PaymentsRepo {
    */
   list(filter: PaymentFilter): Promise<Payment[]>;
   /**
-   * Determine whether an xlsx-derived payment is new, an exact duplicate,
-   * or a potential duplicate that needs review (business fields match but
-   * source coordinates differ).
+   * All existing xlsx payments whose business key (payee_id, account_id,
+   * date, amount_cents) matches ANY of the given tuples, ordered by id —
+   * the batched lookup behind import dedup. Issues one SELECT per chunk of
+   * keys (a bounded number of queries independent of caller row count);
+   * duplicate tuples are collapsed before querying.
    */
-  checkXlsxDedup(identity: XlsxPaymentIdentity): Promise<XlsxDedupCheckResult>;
+  listXlsxByBusinessKeys(keys: XlsxBusinessKey[]): Promise<Payment[]>;
   get(id: number): Promise<Payment | null>;
   insert(payment: NewPayment): Promise<Payment>;
   /** Apply a partial patch; returns the updated row, or null if `id` is unknown. */
@@ -79,59 +77,6 @@ export function createPaymentsRepo(db: Database): PaymentsRepo {
     return rows.length > 0 ? rows[0] : null;
   }
 
-  function matchesPayload(row: Payment, payment: NewPayment): boolean {
-    return (
-      row.payee_id === payment.payee_id &&
-      row.account_id === payment.account_id &&
-      row.category_id === (payment.category_id ?? null) &&
-      row.date === payment.date &&
-      row.amount_cents === payment.amount_cents &&
-      row.memo === (payment.memo ?? null) &&
-      row.source === payment.source &&
-      row.external_ref === (payment.external_ref ?? null) &&
-      row.source_sheet === (payment.source_sheet ?? null) &&
-      row.source_row === (payment.source_row ?? null) &&
-      row.source_col === (payment.source_col ?? null) &&
-      row.occurrence_index === (payment.occurrence_index ?? null)
-    );
-  }
-
-  async function findByPayload(payment: NewPayment): Promise<Payment[]> {
-    const rows = await db.select<Payment>(
-      `SELECT ${COLUMNS}
-       FROM payments
-       WHERE payee_id = ?
-         AND account_id = ?
-         AND category_id IS ?
-         AND date = ?
-         AND amount_cents = ?
-         AND memo IS ?
-         AND source = ?
-         AND external_ref IS ?
-         AND source_sheet IS ?
-         AND source_row IS ?
-         AND source_col IS ?
-         AND occurrence_index IS ?
-       ORDER BY id DESC
-       LIMIT 2`,
-      [
-        payment.payee_id,
-        payment.account_id,
-        payment.category_id ?? null,
-        payment.date,
-        payment.amount_cents,
-        payment.memo ?? null,
-        payment.source,
-        payment.external_ref ?? null,
-        payment.source_sheet ?? null,
-        payment.source_row ?? null,
-        payment.source_col ?? null,
-        payment.occurrence_index ?? null,
-      ],
-    );
-    return rows;
-  }
-
   return {
     async list(filter) {
       const clauses = ["date >= ?", "date <= ?"];
@@ -154,62 +99,35 @@ export function createPaymentsRepo(db: Database): PaymentsRepo {
       );
     },
 
-    async checkXlsxDedup(identity) {
-      const exactMatches = await db.select<Payment>(
-        `SELECT ${COLUMNS}
-         FROM payments
-         WHERE source = 'xlsx'
-           AND payee_id = ?
-           AND account_id = ?
-           AND date = ?
-           AND amount_cents = ?
-           AND source_sheet = ?
-           AND source_row = ?
-           AND source_col = ?
-           AND occurrence_index = ?
-         ORDER BY id`,
-        [
-          identity.payee_id,
-          identity.account_id,
-          identity.date,
-          identity.amount_cents,
-          identity.source_sheet,
-          identity.source_row,
-          identity.source_col,
-          identity.occurrence_index,
-        ],
-      );
-      if (exactMatches.length > 0) return { kind: "exact_duplicate", existing: exactMatches[0] };
+    async listXlsxByBusinessKeys(keys) {
+      const unique: XlsxBusinessKey[] = [];
+      const seen = new Set<string>();
+      for (const key of keys) {
+        const id = `${key.payee_id}|${key.account_id}|${key.date}|${key.amount_cents}`;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        unique.push(key);
+      }
 
-      const potentialMatches = await db.select<Payment>(
-        `SELECT ${COLUMNS}
-         FROM payments
-         WHERE source = 'xlsx'
-           AND payee_id = ?
-           AND account_id = ?
-           AND date = ?
-           AND amount_cents = ?
-           AND (
-             source_sheet != ?
-             OR source_row != ?
-             OR source_col != ?
-             OR occurrence_index != ?
-           )
-         ORDER BY id`,
-        [
-          identity.payee_id,
-          identity.account_id,
-          identity.date,
-          identity.amount_cents,
-          identity.source_sheet,
-          identity.source_row,
-          identity.source_col,
-          identity.occurrence_index,
-        ],
-      );
-      if (potentialMatches.length > 0) return { kind: "potential_duplicate", matches: potentialMatches };
-
-      return { kind: "new" };
+      const matches: Payment[] = [];
+      for (let offset = 0; offset < unique.length; offset += BUSINESS_KEY_CHUNK_SIZE) {
+        const chunk = unique.slice(offset, offset + BUSINESS_KEY_CHUNK_SIZE);
+        const tuples = chunk.map(() => "(?, ?, ?, ?)").join(", ");
+        const params: SqlValue[] = [];
+        for (const key of chunk) {
+          params.push(key.payee_id, key.account_id, key.date, key.amount_cents);
+        }
+        const rows = await db.select<Payment>(
+          `SELECT ${COLUMNS}
+           FROM payments
+           WHERE source = 'xlsx'
+             AND (payee_id, account_id, date, amount_cents) IN (VALUES ${tuples})
+           ORDER BY id`,
+          params,
+        );
+        matches.push(...rows);
+      }
+      return matches;
     },
 
     get,
@@ -254,14 +172,9 @@ export function createPaymentsRepo(db: Database): PaymentsRepo {
           payment.occurrence_index ?? null,
         ],
       );
-      return resolveInsertedRow({
-        context: "payments.insert",
-        lastInsertId: result.lastInsertId,
-        payload: payment,
-        getById: get,
-        payloadMatches: matchesPayload,
-        findByPayload,
-      });
+      const created = await get(result.lastInsertId);
+      if (!created) throw new Error(`payments.insert: row ${result.lastInsertId} missing`);
+      return created;
     },
 
     async update(id, patch) {

@@ -1,7 +1,6 @@
 import type { Database } from "../db";
 import type { Category, CategoryPatch, NewCategory } from "../entities";
 import { EntityInUseError, ValidationError } from "../errors";
-import { resolveInsertedRow } from "./insert-verify";
 import { buildUpdate } from "./helpers";
 
 interface CategoryRow {
@@ -57,29 +56,6 @@ export function createCategoriesRepo(db: Database): CategoriesRepo {
     return rows[0]?.count ?? 0;
   }
 
-  function matchesPayload(row: Category, category: NewCategory): boolean {
-    return (
-      row.name === category.name &&
-      row.parent_id === (category.parent_id ?? null) &&
-      row.gnucash_guid === (category.gnucash_guid ?? null)
-    );
-  }
-
-  async function findByPayload(category: NewCategory): Promise<Category[]> {
-    const rows = await db.select<CategoryRow>(
-      `SELECT ${COLUMNS}
-       FROM categories
-       WHERE name = ?
-         AND parent_id IS ?
-         AND gnucash_guid IS ?
-         AND archived = 0
-       ORDER BY id DESC
-       LIMIT 2`,
-      [category.name, category.parent_id ?? null, category.gnucash_guid ?? null],
-    );
-    return rows.map(toCategory);
-  }
-
   return {
     async list({ includeArchived = false } = {}) {
       const where = includeArchived ? "" : " WHERE archived = 0";
@@ -97,14 +73,9 @@ export function createCategoriesRepo(db: Database): CategoriesRepo {
         "INSERT INTO categories (name, parent_id, gnucash_guid) VALUES (?, ?, ?)",
         [category.name, category.parent_id ?? null, category.gnucash_guid ?? null],
       );
-      return resolveInsertedRow({
-        context: "categories.insert",
-        lastInsertId: result.lastInsertId,
-        payload: category,
-        getById: get,
-        payloadMatches: matchesPayload,
-        findByPayload,
-      });
+      const created = await get(result.lastInsertId);
+      if (!created) throw new Error(`categories.insert: row ${result.lastInsertId} missing`);
+      return created;
     },
 
     async update(id, patch) {

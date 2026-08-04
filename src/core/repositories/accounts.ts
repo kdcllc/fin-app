@@ -1,7 +1,6 @@
 import type { Database } from "../db";
 import type { Account, AccountKind, AccountPatch, NewAccount } from "../entities";
 import { EntityInUseError, ValidationError } from "../errors";
-import { resolveInsertedRow } from "./insert-verify";
 import { buildUpdate } from "./helpers";
 
 interface AccountRow {
@@ -62,35 +61,6 @@ export function createAccountsRepo(db: Database): AccountsRepo {
     return rows[0]?.count ?? 0;
   }
 
-  function matchesPayload(row: Account, account: NewAccount): boolean {
-    return (
-      row.name === account.name &&
-      row.kind === account.kind &&
-      row.last4 === (account.last4 ?? null) &&
-      row.gnucash_guid === (account.gnucash_guid ?? null)
-    );
-  }
-
-  async function findByPayload(account: NewAccount): Promise<Account[]> {
-    const rows = await db.select<AccountRow>(
-      `SELECT ${COLUMNS}
-       FROM accounts
-       WHERE name = ?
-         AND kind = ?
-         AND last4 IS ?
-         AND gnucash_guid IS ?
-       ORDER BY id DESC
-       LIMIT 2`,
-      [
-        account.name,
-        account.kind,
-        account.last4 ?? null,
-        account.gnucash_guid ?? null,
-      ],
-    );
-    return rows.map(toAccount);
-  }
-
   return {
     async list({ includeArchived = false } = {}) {
       const where = includeArchived ? "" : " WHERE archived = 0";
@@ -108,14 +78,9 @@ export function createAccountsRepo(db: Database): AccountsRepo {
         "INSERT INTO accounts (name, kind, last4, gnucash_guid) VALUES (?, ?, ?, ?)",
         [account.name, account.kind, account.last4 ?? null, account.gnucash_guid ?? null],
       );
-      return resolveInsertedRow({
-        context: "accounts.insert",
-        lastInsertId: result.lastInsertId,
-        payload: account,
-        getById: get,
-        payloadMatches: matchesPayload,
-        findByPayload,
-      });
+      const created = await get(result.lastInsertId);
+      if (!created) throw new Error(`accounts.insert: row ${result.lastInsertId} missing`);
+      return created;
     },
 
     async update(id, patch) {
