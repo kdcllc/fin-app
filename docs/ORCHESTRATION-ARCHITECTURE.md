@@ -114,7 +114,14 @@ ON subagent invocation failure:
 > subagent context packages by `feature-orchestrator` (see its "Supporting-skill routing" section)
 > based on which layer a task touches.
 
-### Subagents (`.claude/agents/`)
+### Subagents (shared bodies + IDE wrappers)
+
+Persona prompts live in **`.agents/agents/<name>.md`** (shared, not auto-discovered by either IDE). Thin **IDE wrappers** pin `model:` and instruct the subagent to read the shared body first:
+
+| Wrapper path | IDE | Purpose |
+|---|---|---|
+| `.cursor/agents/<name>.md` | Cursor | Pins Cursor slugs; wins over `.claude/agents/` on name clash |
+| `.claude/agents/<name>.md` | Claude Code | Pins Claude Code slugs |
 
 | Subagent | Behavioral Style | Use Case |
 |----------|------------------|----------|
@@ -122,6 +129,15 @@ ON subagent invocation failure:
 | `qa-judge` | Skeptical, user-perspective | Behavioral QA of the app UI, data effects, exports, and GnuCash safety |
 | `implementation-executor` | Focused, checklist-driven | Implementation + fixes |
 | `test-generator` | Coverage-obsessed | Vitest (TS core) and `cargo test` (Rust) suites, fixtures only — never live user data |
+
+**Model routing (required):** On every launch of the four named subagents, orchestrators **must pass** the frozen-table slug for **role + current IDE** (see `CLAUDE.md` or `goals/09-ide-agent-alignment/GOAL.md`). Cursor's Task tool inherits the parent model when `model` is omitted — wrapper `model:` frontmatter is not enough.
+
+| Role | Cursor | Claude Code |
+|---|---|---|
+| Judges (`pessimistic-judge`, `qa-judge`) | `cursor-grok-4.6-xhigh` | `fable` |
+| Coding agents (`implementation-executor`, `test-generator`) | `composer-2.5-fast` | `sonnet` |
+
+**Duplicate-load guard:** Do **not** copy skills into `.agents/skills/` or `.cursor/skills/` — Cursor would discover each `SKILL.md` twice. Skills stay under `.claude/skills/` only. Do not create `.cursor/commands/` or `.claude/commands/`.
 
 ---
 
@@ -322,7 +338,8 @@ Every subagent invocation requires a complete context package:
 ┌─────────────────────────────────────────────────────────────────┐
 │  SECTION 1: ROLE ASSIGNMENT                                      │
 │  Agent tool with subagent_type: [subagent-name]                 │
-│  (the agent definition in .claude/agents/ loads automatically)  │
+│  Persona: .agents/agents/[subagent-name].md (read by wrapper)   │
+│  model: frozen-table slug for role + current IDE (required)     │
 ├─────────────────────────────────────────────────────────────────┤
 │  SECTION 2: TASK DEFINITION                                      │
 │  "## Task"                                                       │
@@ -388,12 +405,27 @@ Every subagent invocation requires a complete context package:
 ### File Locations
 
 ```
+.agents/
+└── agents/                         # Shared subagent persona bodies (not auto-discovered)
+    ├── pessimistic-judge.md
+    ├── qa-judge.md
+    ├── implementation-executor.md
+    └── test-generator.md
+
+.cursor/
+├── agents/                         # Cursor wrappers (model: + read shared body)
+│   ├── pessimistic-judge.md
+│   ├── qa-judge.md
+│   ├── implementation-executor.md
+│   └── test-generator.md
+└── rules/                          # Cursor alwaysApply + glob-scoped rules (model routing)
+
 .claude/
-├── agents/
-│   ├── pessimistic-judge.md        # Skeptical code/goal/task reviewer
-│   ├── qa-judge.md                 # Skeptical user-facing QA reviewer (UI, DB effects, exports, GnuCash safety)
-│   ├── implementation-executor.md  # Focused implementer
-│   └── test-generator.md           # Vitest + cargo test creator (fixtures only)
+├── agents/                         # Claude Code wrappers (model: + read shared body)
+│   ├── pessimistic-judge.md
+│   ├── qa-judge.md
+│   ├── implementation-executor.md
+│   └── test-generator.md
 │
 ├── skills/
 │   ├── feature-orchestrator/       # Feature coordination
@@ -414,6 +446,8 @@ Every subagent invocation requires a complete context package:
 │   └── (installed from mattpocock/skills:)
 │       tdd/  codebase-design/  setup-ts-deep-modules/  design-an-interface/
 │       domain-modeling/  diagnosing-bugs/  qa/  implement/  grill-me/
+
+CLAUDE.md                           # Project instructions, frozen model table, duplicate-load guard
 
 docs/
 ├── RESEARCH.md                     # Ground-truth research & decisions

@@ -7,7 +7,16 @@ description: Coordinate feature implementation for fin-app across its layers (SQ
 
 You are the orchestrator. **You coordinate — you never implement.** All execution goes to `implementation-executor` / `test-generator` subagents; all verification goes to `pessimistic-judge` (and optionally `qa-judge`) via the Agent tool. Each subagent gets fresh context: everything it needs must be in its prompt (see Context Package below).
 
-Canonical project references: `docs/RESEARCH.md` (research & architecture decisions), `goals/README.md` (goal index), `docs/ORCHESTRATION-ARCHITECTURE.md` (this system's full guide).
+Canonical project references: `docs/RESEARCH.md` (research & architecture decisions), `goals/README.md` (goal index), `docs/ORCHESTRATION-ARCHITECTURE.md` (this system's full guide), `CLAUDE.md` (frozen model table).
+
+## Named-subagent model routing (mandatory)
+
+Launch subagents by registered name: `pessimistic-judge`, `qa-judge`, `implementation-executor`, `test-generator`. On **every** such launch, pass the frozen-table `model` slug for **role + current IDE** (see `CLAUDE.md` or `goals/09-ide-agent-alignment/GOAL.md`). Cursor's Task tool inherits the parent model when `model` is omitted — wrapper `model:` frontmatter is not enough.
+
+| Role | Cursor | Claude Code |
+|---|---|---|
+| Judges (`pessimistic-judge`, `qa-judge`) | `cursor-grok-4.6-xhigh` | `fable` |
+| Coding agents (`implementation-executor`, `test-generator`) | `composer-2.5-fast` | `sonnet` |
 
 ## Phase 1 — Alignment (no files created)
 
@@ -62,7 +71,7 @@ Include in the worker's context package based on the layer touched:
 
 ## Context package (every subagent prompt)
 
-1. **Role**: "You are the [name] subagent" + its agent file is loaded automatically via subagent_type.
+1. **Role**: "You are the [name] subagent." Persona prompt is `.agents/agents/[name].md` (read by the IDE wrapper). Launch must pass the frozen-table `model` slug for role + current IDE — see "Named-subagent model routing" above.
 2. **Task**: what to accomplish.
 3. **Input**: exhaustive requirements; explicit file paths to read (task file, skills, source files).
 4. **Constraints**: must-do / must-NOT-do (cents-not-floats, SQL only in core, GnuCash guardrails, fixtures-only tests).

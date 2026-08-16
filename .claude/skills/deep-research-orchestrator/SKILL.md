@@ -7,6 +7,15 @@ description: Research → Plan workflow for fin-app topics needing investigation
 
 For topics where building would be guessing. Coordinates research subagents, then converts findings into an executable goal. You coordinate; subagents research; judges verify.
 
+## Named-subagent model routing (mandatory)
+
+Launch subagents by registered name: `pessimistic-judge`, `qa-judge`, `implementation-executor`, `test-generator`. On **every** such launch, pass the frozen-table `model` slug for **role + current IDE** (see `CLAUDE.md` or `goals/09-ide-agent-alignment/GOAL.md`). Cursor's Task tool inherits the parent model when `model` is omitted — wrapper `model:` frontmatter is not enough.
+
+| Role | Cursor | Claude Code |
+|---|---|---|
+| Judges (`pessimistic-judge`, `qa-judge`) | `cursor-grok-4.6-xhigh` | `fable` |
+| Coding agents (`implementation-executor`, `test-generator`) | `composer-2.5-fast` | `sonnet` |
+
 ## Research ground truth
 
 - `docs/RESEARCH.md` — the committed, canonical research (stack decision, spreadsheet analysis, GnuCash strategy). **Cite as ground truth; promote durable new findings into it.**

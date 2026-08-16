@@ -1,0 +1,21 @@
+---
+description: Model routing for Cursor subagent launches and duplicate-load guard
+alwaysApply: true
+---
+
+# Model routing (Cursor)
+
+Use these slugs when launching named subagents from orchestrator or judge sessions:
+
+| Role | Cursor slug |
+|---|---|
+| Orchestrators, judges | `cursor-grok-4.6-xhigh` |
+| Coding agents (`implementation-executor`, `test-generator`) and coding skills | `composer-2.5-fast` |
+
+When launching any of the four named subagents (`implementation-executor`, `pessimistic-judge`, `qa-judge`, `test-generator`), **pass the frozen-table slug explicitly** in the Task tool `model` parameter. Wrapper `model:` frontmatter is not enough — Cursor's Task tool inherits the parent session model when `model` is omitted.
+
+Project-wide constraints and the full frozen table (both IDE columns) live in `CLAUDE.md` at the repo root.
+
+## Duplicate-load guard
+
+Do **not** create `.agents/skills/`, `.cursor/skills/`, `.cursor/commands/`, or `.claude/commands/`. Do **not** symlink `.claude/skills`. Skills stay in `.claude/skills/` only.

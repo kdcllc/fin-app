@@ -14,6 +14,7 @@ Derived from [docs/RESEARCH.md](../docs/RESEARCH.md). Each goal lives in its own
 | 06 | [GnuCash direct write (guarded)](06-gnucash-write/GOAL.md) | v0.4 | 05 |
 | 07 | [Distribution & auto-update](07-distribution/GOAL.md) | release | 01 |
 | 08 | [SQLite backend rework (persistence & import speed)](08-sqlite-backend-rework/GOAL.md) | v0.1 | 01, 02 |
+| 09 | [Cursor / Claude Code agent alignment](09-ide-agent-alignment/GOAL.md) | DX | — |
 
 ## Status convention
 
