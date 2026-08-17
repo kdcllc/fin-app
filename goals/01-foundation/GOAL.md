@@ -15,9 +15,12 @@ Stand up the Tauri 2.x application skeleton with the SQLite data layer, schema m
 
 ## Scoped execution note (2026-07-29)
 
-By explicit user directive, orchestration is currently scoped to tasks 01.1-01.4 only.
-Task 01.5 (CI) is deferred until a GitHub remote is added and excluded from the current
-completion audit.
+By explicit user directive, orchestration was scoped to tasks 01.1-01.4 only.
+Task 01.5 (CI) was deferred until a GitHub remote existed.
+
+## Scoped execution note (2026-08-17)
+
+GitHub remote now exists. User confirmed this cycle of 01.5 is **quality-checks Linux WebKitGTK/GTK deps only** so `cargo test` / `clippy` can compile on `ubuntu-latest`. 3-OS installable artifacts remain deferred (rest of 01.5 / Goal 07).
 
 ## Tasks
 
