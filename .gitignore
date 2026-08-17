@@ -17,6 +17,7 @@ src-tauri/target/
 
 # Personal financial data — never commit
 *.xlsx
+!tests/fixtures/**/*.xlsx
 
 # Local Claude Code settings
 .claude/settings.local.json

@@ -39,3 +39,4 @@ Execution order (must follow project invariant): Schema/migrations -> TS core ->
 4. [Rust xlsx reader with calamine](tasks/01-calamine-reader.md)
 5. [Review-before-commit import UI](tasks/04-review-ui.md)
 6. [Importer fixtures and automated test coverage](tasks/06-importer-tests.md)
+7. [Commit the Rust reader xlsx fixture for CI](tasks/07-commit-reader-fixture.md)
