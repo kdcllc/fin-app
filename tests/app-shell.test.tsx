@@ -83,6 +83,14 @@ vi.mock("../src/pages/PaymentsPage", () => ({
   ),
 }));
 
+vi.mock("../src/pages/ReportsPage", () => ({
+  ReportsPage: () => (
+    <section className="page">
+      <h1>Reports</h1>
+    </section>
+  ),
+}));
+
 import App from "../src/App";
 
 describe("app shell acceptance behavior", () => {
@@ -105,7 +113,7 @@ describe("app shell acceptance behavior", () => {
     cleanup();
   });
 
-  it("navigates between placeholder pages", async () => {
+  it("navigates between feature pages", async () => {
     const user = userEvent.setup();
     render(<App />);
 

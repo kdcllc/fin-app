@@ -34,6 +34,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (4, include_str!("../migrations/0004_category_archiving.sql")),
     (5, include_str!("../migrations/0005_recurring_dashboard.sql")),
     (6, include_str!("../migrations/0006_recurring_anchor_fields.sql")),
+    (7, include_str!("../migrations/0007_report_indexes.sql")),
 ];
 
 /// Typed errors for the SQLite backend. Serialized as their `Display` string
@@ -489,6 +490,20 @@ mod tests {
             .expect("sqlite_master rows should read")
     }
 
+    fn index_names(conn: &Connection) -> Vec<String> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT name FROM sqlite_master
+                 WHERE type = 'index' AND name NOT LIKE 'sqlite_%'
+                 ORDER BY name",
+            )
+            .expect("sqlite_master index query should prepare");
+        stmt.query_map([], |row| row.get(0))
+            .expect("sqlite_master index query should run")
+            .collect::<Result<Vec<String>, _>>()
+            .expect("sqlite_master index rows should read")
+    }
+
     fn count(state: &OpenBookState, table: &str) -> i64 {
         let rows = with_conn(state, |conn| {
             select_impl(conn, &format!("SELECT COUNT(*) AS n FROM {table}"), &[])
@@ -511,7 +526,12 @@ mod tests {
             LATEST_VERSION,
             "fresh book should be migrated to the latest user_version"
         );
+        assert_eq!(LATEST_VERSION, 7, "latest migration should be version 7");
         assert_eq!(table_names(&conn), EXPECTED_TABLES);
+        assert!(
+            index_names(&conn).contains(&"idx_payments_account_id".to_string()),
+            "payments.account_id index should exist after migration 7"
+        );
     }
 
     #[test]

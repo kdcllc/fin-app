@@ -27,3 +27,12 @@ Grid fixture invariants:
 - Row totals, month totals, and grand total are exact integer-cents equivalents of fixture payments.
 - Dataset is deterministic and year-scoped to support year-switch regression tests.
 - Includes at least one payee with no in-year payments to verify zero-total row handling.
+
+## Goal 04 reporting fixtures
+
+Directory: `report/`
+
+- `reporting-fixture.json`: multi-year payment dataset and literal expected totals for report tests.
+- `chart-mini.png`: PNG for PDF export tests.
+
+See `report/README.md` for invariants and the `seedReportingFixture` helper in `tests/support/report-fixture.ts`.

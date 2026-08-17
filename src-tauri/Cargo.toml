@@ -27,4 +27,6 @@ tauri-plugin-store = "2"
 calamine = "0.28"
 sha2 = "0.10"
 rusqlite = { version = "0.40.1", features = ["bundled"] }
+printpdf = { version = "0.12.5", features = ["png"] }
+rust_xlsxwriter = "0.98.1"
 

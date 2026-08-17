@@ -587,3 +587,53 @@ select {
 .dashboard-suggestion-item {
   margin-bottom: 0.75rem;
 }
+
+/* Reports page */
+
+.reports-page {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.reports-export-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+.reports-export-actions button {
+  white-space: nowrap;
+}
+
+.reports-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: flex-end;
+}
+
+.reports-filters .field {
+  flex-direction: column;
+  align-items: flex-start;
+  margin: 0;
+}
+
+.reports-chart {
+  width: 100%;
+  min-height: 320px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background-color: var(--panel);
+}
+
+.reports-table td:nth-child(2),
+.reports-table th:nth-child(2) {
+  text-align: right;
+}
+
+.reports-table td:nth-child(3),
+.reports-table th:nth-child(3) {
+  text-align: right;
+}

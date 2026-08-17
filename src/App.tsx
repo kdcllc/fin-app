@@ -14,6 +14,7 @@ import { EntityManagementPage } from "./pages/EntityManagementPage";
 import { PaymentsPage } from "./pages/PaymentsPage";
 import { BillsGridPage } from "./pages/BillsGridPage";
 import { DashboardPage } from "./pages/DashboardPage";
+import { ReportsPage } from "./pages/ReportsPage";
 import { loadSettings, updateSettings, type AppSettings } from "./settings";
 import "./App.css";
 
@@ -125,6 +126,8 @@ function App() {
           <BillsGridPage repos={phase.repos} />
         ) : active.id === "import" ? (
           <ImportPage repos={phase.repos} />
+        ) : active.id === "reports" ? (
+          <ReportsPage repos={phase.repos} />
         ) : (
           <PlaceholderPage title={active.label} blurb={active.blurb} />
         )}

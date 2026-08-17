@@ -52,6 +52,20 @@ import { createImportLogRepo, type ImportLogRepo } from "./repositories/import-l
 import { createPaymentsRepo, type PaymentsRepo } from "./repositories/payments";
 import { createPayeesRepo, type PayeesRepo } from "./repositories/payees";
 import { createRecurringBillsRepo, type RecurringBillsRepo } from "./repositories/recurring-bills";
+import { linkReportDatabase } from "./report-db-link";
+import {
+  allTimeWindow,
+  calendarYearWindow,
+  formatCentsDecimal,
+  formatPaymentsCsv,
+  formatReportCsv,
+  formatYearSheetCsv,
+  listPaymentsForReport,
+  runReportQuery,
+  trailing12Window,
+  validateReportFilter,
+  yoyWindowForCalendarYear,
+} from "./report-queries";
 
 export type { BatchStatement, Database, ExecuteResult, SqlValue } from "./db";
 export {
@@ -107,16 +121,35 @@ export type { ImportLogRepo } from "./repositories/import-log";
 export type { PaymentFilter, PaymentsRepo } from "./repositories/payments";
 export type { PayeesRepo } from "./repositories/payees";
 export type { RecurringBillsRepo } from "./repositories/recurring-bills";
+export type {
+  ReportDimension,
+  ReportFilter,
+  ReportGrain,
+  ReportPaymentRow,
+  ReportQuerySpec,
+  ReportRow,
+} from "./report-queries";
 export {
+  allTimeWindow,
   annotateImportRowsWithDedup,
+  calendarYearWindow,
   commitReviewedImport,
+  formatCentsDecimal,
+  formatPaymentsCsv,
+  formatReportCsv,
+  formatYearSheetCsv,
   getBillPayGridForYear,
   buildQuickAddDraft,
   createManualPayment,
   deletePayment,
   formatLocalIsoDate,
+  listPaymentsForReport,
   resolvePayeeDefaults,
+  runReportQuery,
+  trailing12Window,
   updateManualPayment,
+  validateReportFilter,
+  yoyWindowForCalendarYear,
   getRecurringDashboardMonth,
   getRecurringBillSuggestions,
   dismissRecurringBillSuggestion,
@@ -165,7 +198,7 @@ export interface Repositories {
 /** Wire all repositories to a `Database` (any adapter). */
 export function createRepositories(db: Database): Repositories {
   function wire(database: Database): Repositories {
-    return {
+    const repos: Repositories = {
       accounts: createAccountsRepo(database),
       categories: createCategoriesRepo(database),
       importLog: createImportLogRepo(database),
@@ -179,6 +212,8 @@ export function createRepositories(db: Database): Repositories {
         return database.transaction((txDb) => work(wire(txDb)));
       },
     };
+    linkReportDatabase(repos, database);
+    return repos;
   }
 
   return wire(db);

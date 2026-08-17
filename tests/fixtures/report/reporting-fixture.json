@@ -1,0 +1,97 @@
+{
+  "description": "Goal 04 reporting fixture — deterministic payments and literal expected totals for core, UI, and export tests. Money is integer cents. In-window totals apply to window.from…window.to only.",
+  "window": {
+    "from": "2025-01-01",
+    "to": "2026-12-31"
+  },
+  "accounts": [
+    { "name": "Checking", "kind": "checking" },
+    { "name": "Visa", "kind": "credit" }
+  ],
+  "payees": [
+    { "name": "Power Co" },
+    { "name": "Water Co" }
+  ],
+  "categories": [
+    { "name": "Utilities" },
+    { "name": "Groceries" }
+  ],
+  "payments": [
+    {
+      "date": "2024-02-29",
+      "payee": "Power Co",
+      "account": "Checking",
+      "category": "Utilities",
+      "amount_cents": 2900,
+      "note": "leap day — outside default window"
+    },
+    {
+      "date": "2025-12-15",
+      "payee": "Power Co",
+      "account": "Checking",
+      "category": "Utilities",
+      "amount_cents": 5000,
+      "note": "December payment in window"
+    },
+    {
+      "date": "2026-01-10",
+      "payee": "Water Co",
+      "account": "Visa",
+      "category": "Groceries",
+      "amount_cents": 7500,
+      "note": "January payment in window"
+    },
+    {
+      "date": "2026-02-01",
+      "payee": "Power Co",
+      "account": "Checking",
+      "category": null,
+      "amount_cents": 1200,
+      "note": "uncategorized payment in window"
+    },
+    {
+      "date": "2026-03-20",
+      "payee": "Water Co",
+      "account": "Checking",
+      "category": "Groceries",
+      "amount_cents": 3300,
+      "note": "second payee and second account usage"
+    }
+  ],
+  "expected": {
+    "all_time_window": { "from": "2024-02-29", "to": "2026-03-20" },
+    "in_window_payment_cents": [5000, 7500, 1200, 3300],
+    "in_window_total_cents": 17000,
+    "by_category": {
+      "Utilities": 5000,
+      "Groceries": 10800,
+      "Uncategorized": 1200
+    },
+    "by_payee": {
+      "Power Co": 6200,
+      "Water Co": 10800
+    },
+    "by_account": {
+      "Checking": 9500,
+      "Visa": 7500
+    },
+    "yoy_calendar_2026": [
+      { "periodKey": "2025", "total_cents": 5000, "count": 1 },
+      { "periodKey": "2026", "total_cents": 12000, "count": 3 }
+    ],
+    "spend_trend_2025_12_to_2026_04": [
+      { "periodKey": "2025-12", "total_cents": 5000, "count": 1 },
+      { "periodKey": "2026-01", "total_cents": 7500, "count": 1 },
+      { "periodKey": "2026-02", "total_cents": 1200, "count": 1 },
+      { "periodKey": "2026-03", "total_cents": 3300, "count": 1 },
+      { "periodKey": "2026-04", "total_cents": 0, "count": 0 }
+    ],
+    "leap_month_2024_02": [
+      { "periodKey": "2024-02", "total_cents": 2900, "count": 1 }
+    ],
+    "calendar_year_2026_category": {
+      "Groceries": 10800,
+      "Uncategorized": 1200
+    }
+  }
+}

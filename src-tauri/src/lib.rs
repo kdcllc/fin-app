@@ -1,4 +1,7 @@
 mod db;
+mod report_csv;
+mod report_pdf;
+mod report_xlsx;
 mod xlsx_reader;
 
 use std::fs::OpenOptions;
@@ -36,7 +39,10 @@ pub fn run() {
             db::db_select,
             db::db_execute,
             db::db_batch,
-            xlsx_reader::read_xlsx_workbook_raw
+            xlsx_reader::read_xlsx_workbook_raw,
+            report_pdf::export_report_pdf,
+            report_csv::export_report_csv,
+            report_xlsx::export_report_xlsx
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
