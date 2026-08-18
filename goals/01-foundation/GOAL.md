@@ -24,7 +24,11 @@ GitHub remote now exists. User confirmed this cycle of 01.5 is **quality-checks 
 
 ## Scoped execution note (2026-08-17, task 01.6)
 
-User confirmed: fix all current `tsc` errors; add `tsc --noEmit` in a JS quality job **before** Rust work; parallelize JS vs Rust quality jobs; cheap Rust debug info in CI (`CARGO_PROFILE_*_DEBUG=0`). **Keep** the 3-OS Tauri matrix on every push/PR (do not move it to tags-only). Downloadable installers remain deferred.
+User confirmed: fix all current `tsc` errors; add `tsc --noEmit` in a JS quality job **before** Rust work; parallelize JS vs Rust quality jobs; cheap Rust debug info in CI (`CARGO_PROFILE_*_DEBUG=0`). **Keep** the 3-OS Tauri matrix on every push/PR (do not move it to tags-only).
+
+## Scoped execution note (2026-08-18, task 01.7)
+
+Windows `npm ci` fails compiling `better-sqlite3` (test-only). User confirmed: GitHub Releases with unsigned 3-OS installers **only on `v*` tags**. Main/PR still build; no Release each push. Signing/updater remain Goal 07.
 
 ## Tasks
 
@@ -34,3 +38,4 @@ User confirmed: fix all current `tsc` errors; add `tsc --noEmit` in a JS quality
 4. [App shell: navigation, settings, book file management](tasks/04-app-shell.md)
 5. [CI pipeline for 3-OS builds](tasks/05-ci-pipeline.md)
 6. [Typecheck in CI and faster quality jobs](tasks/06-ci-typecheck-and-speed.md)
+7. [Skip test-native npm scripts on Tauri builds; release on v* tags](tasks/07-windows-npm-and-tag-releases.md)

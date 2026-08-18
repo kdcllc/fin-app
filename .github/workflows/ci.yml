@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - main
+    tags:
+      - 'v*'
   pull_request:
     branches:
       - main
@@ -80,6 +82,8 @@ jobs:
     needs:
       - quality-js
       - quality-rust
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -121,9 +125,15 @@ jobs:
             patchelf
 
       - name: Install JS dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          releaseName: ${{ github.ref_type == 'tag' && format('fin-app {0}', github.ref_name) || '' }}
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: false
