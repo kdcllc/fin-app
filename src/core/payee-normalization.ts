@@ -207,7 +207,7 @@ export function buildPayeeProposals(labels: string[]): PayeeProposal[] {
     const collapsed = collapseWhitespace(rawLabel);
     const inheritsHeader =
       activeGroupHeader !== null && !normalized.is_group_header && isAccountHintOnlyLabel(collapsed);
-    const payee = inheritsHeader ? activeGroupHeader : normalized.payee;
+    const payee: string = inheritsHeader ? activeGroupHeader! : normalized.payee;
 
     if (normalized.is_group_header) {
       activeGroupHeader = normalized.payee;

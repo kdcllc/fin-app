@@ -81,7 +81,7 @@ function assertValidManualInput(input: ManualPaymentInput): void {
 export async function resolvePayeeDefaults(
   repos: Repositories,
   payeeId: number,
-): Promise<Pick<PaymentQuickAddDraft, "payee_id" | "account_id" | "category_id">> {
+): Promise<{ payee_id: number; account_id: number | null; category_id: number | null }> {
   assertValidEntityId("Payee", payeeId);
 
   const payee = await repos.payees.get(payeeId);

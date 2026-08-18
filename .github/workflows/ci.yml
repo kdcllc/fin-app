@@ -9,8 +9,8 @@ on:
       - main
 
 jobs:
-  quality-checks:
-    name: Lint, Tests, and Clippy
+  quality-js:
+    name: Lint, Typecheck, and Vitest
     runs-on: ubuntu-latest
 
     steps:
@@ -22,6 +22,31 @@ jobs:
         with:
           node-version: 20
           cache: npm
+
+      - name: Install JS dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test (Vitest)
+        run: npm test
+
+  quality-rust:
+    name: Rust Tests and Clippy
+    runs-on: ubuntu-latest
+
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -44,15 +69,6 @@ jobs:
             librsvg2-dev \
             patchelf
 
-      - name: Install JS dependencies
-        run: npm ci
-
-      - name: Lint
-        run: npm run lint
-
-      - name: Test (Vitest)
-        run: npm test
-
       - name: Test (Rust)
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
@@ -61,7 +77,9 @@ jobs:
 
   build-tauri:
     name: Build Tauri (${{ matrix.platform }})
-    needs: quality-checks
+    needs:
+      - quality-js
+      - quality-rust
     strategy:
       fail-fast: false
       matrix:

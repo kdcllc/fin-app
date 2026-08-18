@@ -68,7 +68,10 @@ function getPatchedField<K extends keyof Payment>(
   current: Payment,
   key: K,
 ): Payment[K] {
-  return key in patch ? (patch[key] as Payment[K]) : current[key];
+  if (key in patch) {
+    return (patch as Partial<Payment>)[key] as Payment[K];
+  }
+  return current[key];
 }
 
 export function createPaymentsRepo(db: Database): PaymentsRepo {

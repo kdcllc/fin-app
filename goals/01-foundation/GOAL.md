@@ -22,6 +22,10 @@ Task 01.5 (CI) was deferred until a GitHub remote existed.
 
 GitHub remote now exists. User confirmed this cycle of 01.5 is **quality-checks Linux WebKitGTK/GTK deps only** so `cargo test` / `clippy` can compile on `ubuntu-latest`. 3-OS installable artifacts remain deferred (rest of 01.5 / Goal 07).
 
+## Scoped execution note (2026-08-17, task 01.6)
+
+User confirmed: fix all current `tsc` errors; add `tsc --noEmit` in a JS quality job **before** Rust work; parallelize JS vs Rust quality jobs; cheap Rust debug info in CI (`CARGO_PROFILE_*_DEBUG=0`). **Keep** the 3-OS Tauri matrix on every push/PR (do not move it to tags-only). Downloadable installers remain deferred.
+
 ## Tasks
 
 1. [Scaffold Tauri 2.x + React + TypeScript app](tasks/01-scaffold-tauri.md)
@@ -29,3 +33,4 @@ GitHub remote now exists. User confirmed this cycle of 01.5 is **quality-checks 
 3. [Data-access layer & typed API](tasks/03-data-access-layer.md)
 4. [App shell: navigation, settings, book file management](tasks/04-app-shell.md)
 5. [CI pipeline for 3-OS builds](tasks/05-ci-pipeline.md)
+6. [Typecheck in CI and faster quality jobs](tasks/06-ci-typecheck-and-speed.md)

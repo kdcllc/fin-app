@@ -613,28 +613,33 @@ export function ImportPage({
                 <td>
                   {row.dedup.kind === "new" && <span>new</span>}
                   {row.dedup.kind === "exact_duplicate" && <span>exact duplicate (auto-skip)</span>}
-                  {row.dedup.kind === "potential_duplicate" && (
-                    <label>
-                      {row.dedup.match_count} similar row(s)
-                      <select
-                        value={row.dedup.decision ?? ""}
-                        onChange={(e) => {
-                          const decision = e.currentTarget.value;
-                          patchRow(row.id, {
-                            dedup: {
-                              kind: "potential_duplicate",
-                              match_count: row.dedup.match_count,
-                              decision: decision === "keep" || decision === "skip" ? decision : null,
-                            },
-                          });
-                        }}
-                      >
-                        <option value="">choose…</option>
-                        <option value="keep">keep row</option>
-                        <option value="skip">skip row</option>
-                      </select>
-                    </label>
-                  )}
+                  {row.dedup.kind === "potential_duplicate" &&
+                    (() => {
+                      const match_count = row.dedup.match_count;
+                      return (
+                        <label>
+                          {match_count} similar row(s)
+                          <select
+                            value={row.dedup.decision ?? ""}
+                            onChange={(e) => {
+                              const decision = e.currentTarget.value;
+                              patchRow(row.id, {
+                                dedup: {
+                                  kind: "potential_duplicate",
+                                  match_count,
+                                  decision:
+                                    decision === "keep" || decision === "skip" ? decision : null,
+                                },
+                              });
+                            }}
+                          >
+                            <option value="">choose…</option>
+                            <option value="keep">keep row</option>
+                            <option value="skip">skip row</option>
+                          </select>
+                        </label>
+                      );
+                    })()}
                 </td>
               </tr>
             ))}
