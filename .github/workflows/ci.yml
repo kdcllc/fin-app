@@ -116,7 +116,13 @@ jobs:
       fail-fast: false
       matrix:
         platform:
-          - ubuntu-latest
+          # Pinned to 22.04 (not -latest): binaries link against the build
+          # machine's glibc, and a deb built on 24.04 (glibc 2.39) won't run
+          # on Ubuntu 22.04 (glibc 2.35). NOTE: the ubuntu-22.04 runner label
+          # is deprecated 2026-09-17 and retired 2027-04-17
+          # (actions/runner-images#14254) — before then, move this job into an
+          # ubuntu:22.04 container on a newer runner to keep glibc 2.35 compat.
+          - ubuntu-22.04
           - windows-latest
           - macos-latest
 
@@ -143,7 +149,7 @@ jobs:
             src-tauri -> target
 
       - name: Install Linux system dependencies
-        if: matrix.platform == 'ubuntu-latest'
+        if: matrix.platform == 'ubuntu-22.04'
         timeout-minutes: 6
         run: |
           set -euo pipefail
