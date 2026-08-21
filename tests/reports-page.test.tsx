@@ -248,10 +248,14 @@ describe("ReportsPage", () => {
     await screen.findByRole("heading", { level: 1, name: "Reports" });
 
     const accountSelect = screen.getByLabelText("Account filter");
-    expect(within(accountSelect).getByRole("option", { name: "Old Savings (archived)" })).toBeTruthy();
+    expect(
+      await within(accountSelect).findByRole("option", { name: "Old Savings (archived)" }),
+    ).toBeTruthy();
 
     const categorySelect = screen.getByLabelText("Category filter");
-    expect(within(categorySelect).getByRole("option", { name: "Legacy (archived)" })).toBeTruthy();
+    expect(
+      await within(categorySelect).findByRole("option", { name: "Legacy (archived)" }),
+    ).toBeTruthy();
     expect(within(categorySelect).getByRole("option", { name: "Uncategorized" })).toBeTruthy();
 
     runReportQuerySpy.mockClear();
