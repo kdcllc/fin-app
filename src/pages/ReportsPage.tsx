@@ -168,6 +168,7 @@ export function ReportsPage({
   const [categories, setCategories] = useState<
     Array<{ id: number; name: string; archived: boolean }>
   >([]);
+  const [entityListsReady, setEntityListsReady] = useState(false);
 
   const [loadState, setLoadState] = useState<"loading" | "idle">("loading");
   const [error, setError] = useState<string | null>(null);
@@ -246,9 +247,11 @@ export function ReportsPage({
         ]);
         setAccounts(nextAccounts);
         setCategories(nextCategories);
+        setEntityListsReady(true);
       } catch (e) {
         setError(toUiErrorMessage(e));
         setLoadState("idle");
+        setEntityListsReady(true);
       }
     })();
   }, [repos]);
@@ -708,6 +711,8 @@ export function ReportsPage({
           Account
           <select
             aria-label="Account filter"
+            aria-busy={!entityListsReady}
+            disabled={!entityListsReady}
             value={accountIdText}
             onChange={(event) => setAccountIdText(event.currentTarget.value)}
           >
@@ -725,6 +730,8 @@ export function ReportsPage({
           Category
           <select
             aria-label="Category filter"
+            aria-busy={!entityListsReady}
+            disabled={!entityListsReady}
             value={
               categorySelection === "all"
                 ? ""

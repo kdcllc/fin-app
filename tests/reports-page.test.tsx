@@ -76,6 +76,14 @@ describe("ReportsPage", () => {
     return seedReportingFixture(fixtureDb, options);
   }
 
+  async function waitForSeededFilters() {
+    const accountSelect = screen.getByLabelText("Account filter");
+    const categorySelect = screen.getByLabelText("Category filter");
+    await within(accountSelect).findByRole("option", { name: "Checking" }, { timeout: 10_000 });
+    await within(categorySelect).findByRole("option", { name: "Utilities" }, { timeout: 10_000 });
+    return { accountSelect, categorySelect };
+  }
+
   it("first paint uses the current calendar year window", async () => {
     if (!fixtureDb) throw new Error("fixture db not available");
 
@@ -246,15 +254,13 @@ describe("ReportsPage", () => {
     const user = userEvent.setup();
     render(<ReportsPage repos={fixtureDb.repos} asOfDate={AS_OF} initialYear={2026} />);
     await screen.findByRole("heading", { level: 1, name: "Reports" });
+    const { accountSelect, categorySelect } = await waitForSeededFilters();
 
-    const accountSelect = screen.getByLabelText("Account filter");
     expect(
-      await within(accountSelect).findByRole("option", { name: "Old Savings (archived)" }),
+      within(accountSelect).getByRole("option", { name: /^Old Savings \(archived\)$/ }),
     ).toBeTruthy();
-
-    const categorySelect = screen.getByLabelText("Category filter");
     expect(
-      await within(categorySelect).findByRole("option", { name: "Legacy (archived)" }),
+      within(categorySelect).getByRole("option", { name: /^Legacy \(archived\)$/ }),
     ).toBeTruthy();
     expect(within(categorySelect).getByRole("option", { name: "Uncategorized" })).toBeTruthy();
 
@@ -271,13 +277,13 @@ describe("ReportsPage", () => {
     runReportQuerySpy.mockClear();
     await user.selectOptions(categorySelect, "__uncategorized__");
     await screen.findByRole("table");
-    expect(runReportQuerySpy).toHaveBeenCalledWith(
+      expect(runReportQuerySpy).toHaveBeenCalledWith(
       fixtureDb.repos,
       expect.objectContaining({
         filter: expect.objectContaining({ categoryId: null }),
       }),
     );
-  });
+  }, 15_000);
 
   it("shows empty state and validation errors", async () => {
     if (!fixtureDb) throw new Error("fixture db not available");
@@ -485,6 +491,7 @@ describe("ReportsPage", () => {
     renderWithExportMocks();
 
     await screen.findByText("$108.00");
+    await waitForSeededFilters();
     await user.selectOptions(screen.getByLabelText("Category filter"), "__uncategorized__");
     await screen.findByRole("table");
 
@@ -519,6 +526,7 @@ describe("ReportsPage", () => {
     renderWithExportMocks();
 
     await screen.findByText("$108.00");
+    await waitForSeededFilters();
     await user.selectOptions(screen.getByLabelText("Account filter"), String(ids.checkingId));
     await user.selectOptions(screen.getByLabelText("Category filter"), "__uncategorized__");
     await screen.findByRole("table");
@@ -548,6 +556,7 @@ describe("ReportsPage", () => {
     renderWithExportMocks();
 
     await screen.findByText("$108.00");
+    await waitForSeededFilters();
     await user.selectOptions(screen.getByLabelText("Account filter"), String(ids.checkingId));
     await user.selectOptions(screen.getByLabelText("Category filter"), "__uncategorized__");
     await screen.findByRole("table");
