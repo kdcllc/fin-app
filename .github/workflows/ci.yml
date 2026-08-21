@@ -10,6 +10,13 @@ on:
     branches:
       - main
 
+# Creating a GitHub Release requires write. Repo Settings → Actions → General
+# → Workflow permissions must also be "Read and write permissions"; otherwise
+# GITHUB_TOKEN stays read-only and tauri-action fails with
+# "Resource not accessible by integration".
+permissions:
+  contents: write
+
 jobs:
   quality-js:
     name: Lint, Typecheck, and Vitest
@@ -182,6 +189,7 @@ jobs:
           includeUpdaterJson: false
 
       - name: Upload OS installers
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: fin-app-${{ matrix.platform }}
