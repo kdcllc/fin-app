@@ -787,10 +787,10 @@ export function ReportsPage({
               </tr>
             </thead>
             <tbody>
-              {rows.map((row) => {
+              {rows.map((row, index) => {
                 const key = showPeriodColumn
-                  ? row.periodKey
-                  : `${row.groupKey ?? "null"}|${row.groupLabel}`;
+                  ? `${row.periodKey ?? "period"}-${index}`
+                  : `${row.groupKey ?? "null"}|${row.groupLabel}|${index}`;
                 const label = showPeriodColumn ? row.periodKey : row.groupLabel;
                 return (
                   <tr key={key}>

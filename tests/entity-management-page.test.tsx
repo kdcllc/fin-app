@@ -263,11 +263,22 @@ function findSectionByHeading(name: string): HTMLElement {
   return section;
 }
 
-function findRowInSection(section: HTMLElement, text: string): HTMLElement {
-  const rows = within(section).getAllByRole("row");
-  const row = rows.find((candidate) => within(candidate).queryByText(text, { selector: "td" }) !== null) ?? null;
-  if (!row) throw new Error(`Could not locate row with text: ${text}`);
-  return row;
+async function waitForEntitiesReady() {
+  await screen.findByRole("cell", { name: "Checking" }, { timeout: 10_000 });
+}
+
+async function findRowInSection(section: HTMLElement, text: string): Promise<HTMLElement> {
+  return waitFor(
+    () => {
+      const rows = within(section).getAllByRole("row");
+      const row =
+        rows.find((candidate) => within(candidate).queryByText(text, { selector: "td" }) !== null) ??
+        null;
+      if (!row) throw new Error(`Could not locate row with text: ${text}`);
+      return row;
+    },
+    { timeout: 10_000 },
+  );
 }
 
 describe("EntityManagementPage", () => {
@@ -280,6 +291,7 @@ describe("EntityManagementPage", () => {
     render(<EntityManagementPage repos={createMockRepos()} />);
 
     await screen.findByRole("heading", { level: 1, name: "Manage Entities" });
+    await waitForEntitiesReady();
 
     const accountsSection = findSectionByHeading("Accounts");
     await user.type(within(accountsSection).getByLabelText("Name"), "Travel Card");
@@ -289,7 +301,7 @@ describe("EntityManagementPage", () => {
 
     await screen.findByText("Account created.");
 
-    const accountRow = findRowInSection(accountsSection, "Travel Card");
+    const accountRow = await findRowInSection(accountsSection, "Travel Card");
     expect(within(accountRow).getByText("credit")).toBeTruthy();
 
     await user.click(within(accountRow).getByRole("button", { name: "Edit" }));
@@ -300,7 +312,9 @@ describe("EntityManagementPage", () => {
 
     await screen.findByText("Account updated.");
 
-    await user.click(within(findRowInSection(accountsSection, "Travel Card")).getByRole("button", { name: "Edit" }));
+    await user.click(
+      within(await findRowInSection(accountsSection, "Travel Card")).getByRole("button", { name: "Edit" }),
+    );
     await waitFor(() => {
       expect((within(accountsSection).getByLabelText("Last 4 (optional)") as HTMLInputElement).value).toBe("2222");
     });
@@ -311,17 +325,18 @@ describe("EntityManagementPage", () => {
     render(<EntityManagementPage repos={createMockRepos()} />);
 
     await screen.findByRole("heading", { level: 1, name: "Manage Entities" });
+    await waitForEntitiesReady();
 
     const payeesSection = findSectionByHeading("Payees");
     const defaultAccountSelect = within(payeesSection).getByLabelText("Default account");
     expect(within(defaultAccountSelect).getByRole("option", { name: "Cash Wallet" })).toBeTruthy();
 
     const accountsSection = findSectionByHeading("Accounts");
-    const accountRow = findRowInSection(accountsSection, "Cash Wallet");
+    const accountRow = await findRowInSection(accountsSection, "Cash Wallet");
     await user.click(within(accountRow).getByRole("button", { name: "Archive" }));
 
     await screen.findByText("Account archived.");
-    expect(within(findRowInSection(accountsSection, "Cash Wallet")).getByText("Archived")).toBeTruthy();
+    expect(within(await findRowInSection(accountsSection, "Cash Wallet")).getByText("Archived")).toBeTruthy();
 
     await waitFor(() => {
       const refreshedSelect = within(findSectionByHeading("Payees")).getByLabelText("Default account");
@@ -336,9 +351,10 @@ describe("EntityManagementPage", () => {
     );
 
     await screen.findByRole("heading", { level: 1, name: "Manage Entities" });
+    await waitForEntitiesReady();
 
     const accountsSection = findSectionByHeading("Accounts");
-    const accountRow = findRowInSection(accountsSection, "Checking");
+    const accountRow = await findRowInSection(accountsSection, "Checking");
     await user.click(within(accountRow).getByRole("button", { name: "Delete" }));
 
     await screen.findByText(
@@ -351,6 +367,7 @@ describe("EntityManagementPage", () => {
     render(<EntityManagementPage repos={createMockRepos()} />);
 
     await screen.findByRole("heading", { level: 1, name: "Manage Entities" });
+    await waitForEntitiesReady();
 
     const payeesSection = findSectionByHeading("Payees");
     await user.selectOptions(within(payeesSection).getByLabelText("Survivor"), "1");
@@ -358,7 +375,7 @@ describe("EntityManagementPage", () => {
     await user.click(within(payeesSection).getByRole("button", { name: "Merge payees" }));
 
     await screen.findByText("Payees merged. Reassigned 2 payments and archived the source payee.");
-    expect(within(findRowInSection(payeesSection, "ACME Power LLC")).getByText("Archived")).toBeTruthy();
+    expect(within(await findRowInSection(payeesSection, "ACME Power LLC")).getByText("Archived")).toBeTruthy();
 
     await waitFor(() => {
       const survivorSelect = within(findSectionByHeading("Payees")).getByLabelText("Survivor");
@@ -377,6 +394,7 @@ describe("EntityManagementPage", () => {
     );
 
     await screen.findByRole("heading", { level: 1, name: "Manage Entities" });
+    await waitForEntitiesReady();
 
     const payeesSection = findSectionByHeading("Payees");
     await user.selectOptions(within(payeesSection).getByLabelText("Survivor"), "1");
