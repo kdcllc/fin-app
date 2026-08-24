@@ -107,21 +107,24 @@ jobs:
 
   build-tauri:
     name: Build Tauri (${{ matrix.platform }})
+    # Platform builds run ONLY on tag pushes: they are the most expensive jobs
+    # (macOS bills at 10x, Windows at 2x) and PR/push correctness is already
+    # covered by quality-js + quality-rust. A release is cut by pushing a v* tag.
+    if: github.ref_type == 'tag'
     needs:
       - quality-js
       - quality-rust
     permissions:
       contents: write
-    # latest.json race (tag builds only): each matrix job runs tauri-action with
+    # latest.json race: each matrix job runs tauri-action with
     # includeUpdaterJson, which read-merge-writes latest.json on the GitHub
     # Release. Parallel jobs overwrite each other and can drop platform entries.
-    # Strategy: serialized release upload — max-parallel: 1 when github.ref_type
-    # is tag so each platform finishes publishing before the next starts. PR/push
-    # builds stay fully parallel (max-parallel 999). A latest.json still missing
+    # Strategy: serialized release upload — max-parallel: 1 so each platform
+    # finishes publishing before the next starts. A latest.json still missing
     # Linux, Windows, or macOS fails the verify-release job (not accepted).
     strategy:
       fail-fast: false
-      max-parallel: ${{ github.ref_type == 'tag' && 1 || 999 }}
+      max-parallel: 1
       matrix:
         platform:
           # Pinned to 22.04 (not -latest): binaries link against the build
@@ -212,22 +215,6 @@ jobs:
           fi
           echo "Release secrets preflight passed."
 
-      # tauri.conf.json enables createUpdaterArtifacts + a pinned updater pubkey;
-      # Tauri v2 fails the bundle when a pubkey exists but TAURI_SIGNING_PRIVATE_KEY
-      # is absent. PR/push builds have no signing key, so overlay the flag off via a
-      # small JSON file (not inline --config JSON) to avoid Windows/PowerShell quoting.
-      - name: Write CI updater overlay (non-tag builds)
-        if: github.ref_type != 'tag'
-        shell: bash
-        run: |
-          cat > src-tauri/ci-updater-off.json <<'EOF'
-          {
-            "bundle": {
-              "createUpdaterArtifacts": false
-            }
-          }
-          EOF
-
       - name: Build Tauri app
         id: tauri
         uses: tauri-apps/tauri-action@v0
@@ -245,9 +232,6 @@ jobs:
           owner: ${{ github.ref_type == 'tag' && 'kdcllc' || '' }}
           repo: ${{ github.ref_type == 'tag' && 'fin-app-releases' || '' }}
           releaseCommitish: ${{ github.ref_type == 'tag' && 'main' || '' }}
-          # tauri-action appends args to `tauri build`; --config path is resolved
-          # relative to the repo root (tauri-action default projectPath `.`). Tag builds use committed config as-is.
-          args: ${{ github.ref_type != 'tag' && '--config src-tauri/ci-updater-off.json' || '' }}
 
       - name: Upload OS installers
         if: ${{ !cancelled() }}
