@@ -101,6 +101,8 @@ Key facts from GnuCash's own documentation:
 2. **Write (only when GnuCash is closed)** — to push bill payments into GnuCash: check the `gnclock` table and refuse if GnuCash holds the lock; take our own lock row; **copy the file as a backup first**; insert balanced transaction + splits (double-entry: debit the EXPENSE account, credit the funding BANK/CREDIT account, amounts as numerator/denominator rationals, 32-hex GUIDs); wrap in a single SQL transaction; verify the `versions` table schema version before writing and refuse on unknown versions; never touch `slots`.
 3. **Fallback (zero-risk)** — generate a **QIF/CSV file** and let the user run GnuCash's built-in import assistant, which provides duplicate detection and account matching. Use this whenever the write preconditions can't be met.
 
+_[Implemented in v0.3: read-only sqlite3 reader (probe/accounts/transactions), account & category GUID mapping, transaction import with review, QIF/CSV export fallback, and reconciliation with manual overrides — see `src-tauri/src/gnucash_reader.rs`, `src/core/gnucash-*.ts`, `src/pages/GnuCashPage.tsx`; direct GnuCash write (tier 2) remains deferred pending explicit go-ahead.]_
+
 ### Data-model essentials to honor
 
 - Accounts form a tree with types (BANK, CREDIT, EXPENSE, …); each has a commodity (currency) with a fraction (e.g., 100 = cents).
@@ -138,7 +140,7 @@ Key facts from GnuCash's own documentation:
 ### Non-functional requirements
 
 - All data local (single SQLite file, user-chosen location, easy to back up/sync via Dropbox-style tools if desired).
-- Signed installers + auto-update on Windows/macOS/Linux via Tauri updater + GitHub Releases.
+- Signed installers + auto-update on Windows/macOS/Linux via Tauri updater + GitHub Releases. _(Amended 2026-08-25: shipped without OS code signing — no Windows/Apple certs; SmartScreen/Gatekeeper workarounds documented in `docs/RELEASING.md`. Updater bundles are minisign-signed and verified against the pubkey pinned in `src-tauri/tauri.conf.json` — see `docs/RELEASING.md`.)_
 - Schema migrations from day one (`tauri-plugin-sql` migrations). _(Amended 2026-08-04: `tauri-plugin-sql` was replaced by an app-owned `rusqlite` backend with `PRAGMA user_version` migrations over the same SQL files — its sqlx connection pool broke transaction atomicity; see Goal 08, `goals/08-sqlite-backend-rework/GOAL.md`.)_
 
 ## 6. Sources

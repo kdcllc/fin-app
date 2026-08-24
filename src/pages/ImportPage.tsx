@@ -19,6 +19,8 @@ interface ImportPageProps {
   repos: Repositories;
   pickWorkbookPath?: () => Promise<string | null>;
   readWorkbook?: (path: string) => Promise<RawWorkbookPayload>;
+  /** Optional hook for app-level busy-guard during import commit. */
+  onBusyChange?: (busy: boolean) => void;
 }
 
 interface UnparsedReviewCell {
@@ -124,6 +126,7 @@ export function ImportPage({
   repos,
   pickWorkbookPath,
   readWorkbook = readXlsxWorkbookRaw,
+  onBusyChange,
 }: ImportPageProps) {
   const [step, setStep] = useState<WizardStep>("pick");
   const [filePath, setFilePath] = useState<string | null>(null);
@@ -400,6 +403,7 @@ export function ImportPage({
     setCommitting(true);
     setCommitProgress(null);
     try {
+      onBusyChange?.(true);
       const result = await commitReviewedImport(repos, {
         source_file: filePath,
         content_hash: contentHash,
@@ -414,6 +418,7 @@ export function ImportPage({
     } catch (e) {
       setError(toUiErrorMessage(e));
     } finally {
+      onBusyChange?.(false);
       setCommitting(false);
       setCommitProgress(null);
     }

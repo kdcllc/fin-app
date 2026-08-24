@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { AppSettings } from "../src/settings";
-import type { Repositories } from "../src/core";
+import type { Database, Repositories } from "../src/core";
 
 const revealItemInDirMock = vi.fn(async () => {});
 const reposStub: Repositories = {
@@ -26,7 +26,8 @@ const reposStub: Repositories = {
     work(reposStub),
   ),
 };
-const openBookMock = vi.fn(async () => reposStub as never);
+const dbStub = {} as Database;
+const openBookMock = vi.fn(async () => ({ db: dbStub, repos: reposStub }));
 const dialogOpenMock = vi.fn(async () => null as string | null);
 const appConfigDirMock = vi.fn(async () => "/home/test/.config/fin-app/");
 const joinPathMock = vi.fn(async (a: string, b: string) => `${a}/${b}`);
@@ -55,8 +56,25 @@ vi.mock("../src/book", () => ({
   openBook: (path: string) => openBookMock(path),
 }));
 
+vi.mock("../src/backup", () => ({
+  backupNow: vi.fn(async () => ({
+    fileName: "fin-app-20260101.db",
+    path: "/tmp/fin-app/backups/fin-app-20260101.db",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    sizeBytes: 4096,
+  })),
+  listBackups: vi.fn(async () => []),
+  restoreBackup: vi.fn(async () => {}),
+  runScheduledBackupIfDue: vi.fn(async () => ({ status: "skipped", reason: "disabled" })),
+}));
+
 vi.mock("../src/settings", () => ({
-  DEFAULT_BACKUPS: { enabled: false },
+  DEFAULT_BACKUPS: {
+    enabled: true,
+    retention: 20,
+    intervalDays: 7,
+    lastBackupAt: null,
+  },
   loadSettings: () => loadSettingsMock(),
   updateSettings: (patch: Partial<AppSettings>) => updateSettingsMock(patch),
 }));
@@ -98,7 +116,12 @@ describe("app shell acceptance behavior", () => {
     persistedSettings = {
       bookPath: "/tmp/fin-app/fin-app.db",
       defaultYear: null,
-      backups: { enabled: false },
+      backups: {
+        enabled: false,
+        retention: 20,
+        intervalDays: 7,
+        lastBackupAt: null,
+      },
     };
     revealItemInDirMock.mockClear();
     openBookMock.mockClear();
@@ -207,7 +230,7 @@ describe("app shell acceptance behavior", () => {
     await user.type(yearField, "2031");
 
     const backupsField = screen.getByRole("checkbox", {
-      name: "Automatic backups (placeholder — arrives in a later milestone)",
+      name: "Enable automatic backups",
     }) as HTMLInputElement;
     await user.click(backupsField);
 
@@ -215,6 +238,8 @@ describe("app shell acceptance behavior", () => {
       expect(updateSettingsMock).toHaveBeenCalled();
       expect(persistedSettings.defaultYear).toBe(2031);
       expect(persistedSettings.backups.enabled).toBe(true);
+      expect(persistedSettings.backups.retention).toBe(20);
+      expect(persistedSettings.backups.intervalDays).toBe(7);
     });
 
     firstSession.unmount();
@@ -226,7 +251,7 @@ describe("app shell acceptance behavior", () => {
 
     const restartedYearField = screen.getByLabelText("Default year") as HTMLInputElement;
     const restartedBackupsField = screen.getByRole("checkbox", {
-      name: "Automatic backups (placeholder — arrives in a later milestone)",
+      name: "Enable automatic backups",
     }) as HTMLInputElement;
 
     await waitFor(() => {

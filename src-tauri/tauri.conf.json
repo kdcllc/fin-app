@@ -9,7 +9,14 @@
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
-  "plugins": {},
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/kdcllc/fin-app-releases/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDc5Njk0NDExN0RBQkMxMDcKUldRSHdhdDlFVVJwZVY0cGxnTHdTbXBZWmFWMVhGK3c0S3k5V2xUaXZXUnlydFoyWi8rUkhuQVIK"
+    }
+  },
   "app": {
     "windows": [
       {
@@ -24,6 +31,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": "all",
     "icon": [
       "icons/32x32.png",
