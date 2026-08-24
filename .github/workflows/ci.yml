@@ -156,6 +156,12 @@ jobs:
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
         with:
+          # rust-cache's default key doesn't include the distro version — an
+          # ubuntu-latest (24.04/glibc 2.39) cache restored onto the pinned
+          # ubuntu-22.04 (glibc 2.35) runner poisons the build: cached proc-macro
+          # dylibs fail with "version `GLIBC_2.39' not found". Keying by
+          # matrix.platform isolates caches per runner image.
+          key: ${{ matrix.platform }}
           workspaces: |
             src-tauri -> target
 
