@@ -10,49 +10,48 @@ fin-app is a Tauri 2.x cross-platform desktop personal-finance app: React and Ty
 4. **Fixtures and temp dirs only** — tests use fixtures and temporary directories; never the user's real book, real GnuCash file, or real xlsx for writes.
 5. **Importers never silently drop cells** — every input cell is parsed or surfaced as unparsed; importers must not silently discard data.
 
-## Frozen model table (2026-08-16)
+## Orchestration
 
-| Role | Cursor | Claude Code |
-|---|---|---|
-| Orchestrators (`feature-orchestrator`, `deep-research-orchestrator`) | `cursor-grok-4.6-xhigh` | `fable` |
-| Judges (`pessimistic-judge`, `qa-judge`, `judge-*` skills) | `cursor-grok-4.6-xhigh` | `fable` |
-| Coding agents (`implementation-executor`, `test-generator`) | `composer-2.5-fast` | `sonnet` |
-| Coding skills (`tdd`, `implement`, `codebase-design`, …) | `composer-2.5-fast` | `sonnet` |
-| Domain reference (`gnucash-data-model`) | no pin | no pin |
+Feature work runs through the orchestrator/worker/evaluator system — see
+`.claude/ORCHESTRATION.md`. Start features with `/feature`; research-first topics with
+`/research`.
 
-Supporting skills not named in the table inherit the **parent session** model. Slash commands are the existing skills (`/feature-orchestrator`, etc.) — no parallel command tree.
+The orchestration kit (`ai-orchestration` v0.19.0, manifest:
+`orchestration-kit.manifest.json`) is installed for both harnesses:
 
-**Claude Code parent sessions:** run orchestrator and judge sessions on `fable`; run coding sessions on `sonnet`.
+- **Claude Code**: `.claude/agents/` (`evaluator`, `qa-evaluator`, `implementer`,
+  `test-writer`, `terminal`), the orchestration skills under `.claude/skills/`
+  (`feature`, `research`, `goal-criteria`, `task-criteria`, `qa-criteria`,
+  `test-ladder`, `align-docs`, `ship-pr`, `auto-loop`), and `.claude/ORCHESTRATION.md`.
+- **Cursor**: self-contained copies under `.cursor/agents/`, `.cursor/skills/`, and
+  `.cursor/ORCHESTRATION.md` (`.cursor/` wins name conflicts when Cursor reads both
+  trees).
 
-**Named-subagent launches:** orchestrators must pass the frozen-table slug for **role + current IDE** on every launch of the four named subagents (`implementation-executor`, `pessimistic-judge`, `qa-judge`, `test-generator`). Wrapper `model:` frontmatter is not enough when the Task tool inherits the parent model.
+**Model tiers** are configuration with a single source:
+`.claude/skills/setup-models.map.md` (reference copy at
+`.cursor/skills/setup-models.map.md`).
 
-## Agent and skill layout
+| Tier | Roles | Claude Code | Cursor |
+|------|-------|-------------|--------|
+| frontier | orchestrator (main session), `evaluator`, `qa-evaluator` | `fable` | `cursor-grok-4.6-xhigh` |
+| light | `implementer`, `test-writer`, `terminal` | `sonnet` | `composer-2.5-fast` |
 
-- **Skills:** `.claude/skills/` (canonical skill definitions)
-- **Shared agent bodies:** `.agents/agents/` (full persona text; not auto-loaded by either IDE)
-- **Claude Code wrappers:** `.claude/agents/` (thin wrappers pinning Claude models)
-- **Cursor wrappers:** `.cursor/agents/` (thin wrappers pinning Cursor models; wins over `.claude/agents/` on name clash)
+Re-run `/setup` to upgrade the kit or re-pin models when providers rotate names.
 
-The four named subagents:
+**Autonomous loop** (optional, installed): `_loop/loop.sh` / `pwsh _loop/loop.ps1`
+drive one `auto-loop` iteration per story from `_goals/backlog.md`. The loop never
+pushes; `_goals/breaker-state.json` is gitignored runtime scratch; the loop may not
+modify `_loop/`, kit agents/skills, the manifest, or `.gitattributes`.
 
-| Subagent | Shared body | Claude wrapper | Cursor wrapper |
-|---|---|---|---|
-| `implementation-executor` | `.agents/agents/implementation-executor.md` | `.claude/agents/implementation-executor.md` | `.cursor/agents/implementation-executor.md` |
-| `pessimistic-judge` | `.agents/agents/pessimistic-judge.md` | `.claude/agents/pessimistic-judge.md` | `.cursor/agents/pessimistic-judge.md` |
-| `qa-judge` | `.agents/agents/qa-judge.md` | `.claude/agents/qa-judge.md` | `.cursor/agents/qa-judge.md` |
-| `test-generator` | `.agents/agents/test-generator.md` | `.claude/agents/test-generator.md` | `.cursor/agents/test-generator.md` |
+## Skill layout
 
-Each wrapper instructs the subagent to read its shared body in `.agents/agents/` before doing work.
-
-## Duplicate-load guard
-
-Do **not** create:
-
-- `.agents/skills/` or `.cursor/skills/` (Cursor would discover the same `SKILL.md` twice)
-- `.cursor/commands/` or `.claude/commands/` (use existing skills as slash commands instead)
-
-Do **not** symlink `.claude/skills` — skills stay as real files under `.claude/skills/`.
-
-Do **not** add `AGENTS.md` at the repo root (Cursor would load it alongside this file).
-
-See `.agents/README.md` for the per-IDE load map.
+- **Domain and supporting skills** (`gnucash-data-model`, `tauri-qa-testing`, `tdd`,
+  `codebase-design`, …) keep a single canonical copy in `.claude/skills/` — Cursor
+  loads that tree natively. Do not duplicate them into `.cursor/skills/`.
+- **Orchestration skills and agents** are kit-emitted per harness (both `.claude/` and
+  `.cursor/` copies) and managed by `/setup` — edit the kit templates or re-run
+  `/setup` rather than hand-editing emitted copies.
+- Do **not** add `AGENTS.md` at the repo root (Cursor would load it alongside this
+  file).
+- The legacy `goals/` directory is a pre-kit historical archive — read-only. New goals
+  go to `_goals/`.

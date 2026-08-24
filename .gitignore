@@ -22,6 +22,11 @@ src-tauri/target/
 # Local Claude Code settings
 .claude/settings.local.json
 
+# Orchestration-kit runtime scratch — never commit
+_goals/breaker-state.json
+_goals/breaker-state.json.tmp.*
+.loop-worktrees/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
