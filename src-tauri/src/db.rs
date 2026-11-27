@@ -27,14 +27,38 @@ use tauri::State;
 /// All schema migrations in order: (`user_version` after applying, SQL).
 /// Every future schema change is appended here as a new version — never edit
 /// an already-shipped migration file.
-const MIGRATIONS: &[(i64, &str)] = &[
+/// App-owned tables used for fresh-book detection (see pre-migration backup hook).
+pub(crate) const APP_TABLES: &[&str] = &[
+    "accounts",
+    "categories",
+    "import_log",
+    "payees",
+    "payments",
+    "recurring_bill_suggestion_dismissals",
+    "recurring_bills",
+];
+
+pub(crate) const MIGRATIONS: &[(i64, &str)] = &[
     (1, include_str!("../migrations/0001_schema_v1.sql")),
-    (2, include_str!("../migrations/0002_prove_migration_path.sql")),
+    (
+        2,
+        include_str!("../migrations/0002_prove_migration_path.sql"),
+    ),
     (3, include_str!("../migrations/0003_import_idempotency.sql")),
     (4, include_str!("../migrations/0004_category_archiving.sql")),
-    (5, include_str!("../migrations/0005_recurring_dashboard.sql")),
-    (6, include_str!("../migrations/0006_recurring_anchor_fields.sql")),
+    (
+        5,
+        include_str!("../migrations/0005_recurring_dashboard.sql"),
+    ),
+    (
+        6,
+        include_str!("../migrations/0006_recurring_anchor_fields.sql"),
+    ),
     (7, include_str!("../migrations/0007_report_indexes.sql")),
+    (
+        8,
+        include_str!("../migrations/0008_gnucash_integration.sql"),
+    ),
 ];
 
 /// Typed errors for the SQLite backend. Serialized as their `Display` string
@@ -60,6 +84,16 @@ pub enum BackendError {
     Sqlite(String),
     /// Filesystem failure while materializing the book file.
     Io(String),
+    /// Backup creation or verification failed.
+    BackupFailed(String),
+    /// Retention parameter was less than 1.
+    InvalidRetention(i64),
+    /// Restore rejected a backup path outside the book's `backups/` folder.
+    InvalidBackupPath(String),
+    /// Backup file failed the open/integrity probe.
+    BackupNotValid(String),
+    /// Restore failed after validation; see message for the stage.
+    RestoreFailed(String),
 }
 
 impl fmt::Display for BackendError {
@@ -88,6 +122,18 @@ impl fmt::Display for BackendError {
             }
             Self::Sqlite(message) => write!(f, "{message}"),
             Self::Io(message) => write!(f, "{message}"),
+            Self::BackupFailed(message) => write!(f, "backup failed: {message}"),
+            Self::InvalidRetention(value) => {
+                write!(f, "backup retention must be at least 1, got {value}")
+            }
+            Self::InvalidBackupPath(path) => {
+                write!(
+                    f,
+                    "backup path is not inside the book backups folder: {path}"
+                )
+            }
+            Self::BackupNotValid(message) => write!(f, "backup file is not valid: {message}"),
+            Self::RestoreFailed(message) => write!(f, "restore failed: {message}"),
         }
     }
 }
@@ -194,11 +240,37 @@ pub fn db_batch(
     with_conn(&state, |conn| batch_impl(conn, &statements))
 }
 
+/// Create a verified backup of the open book; optional `retention` (default 20).
+#[tauri::command(async)]
+pub fn backup_now(
+    state: State<'_, OpenBookState>,
+    retention: Option<u32>,
+) -> Result<crate::backup::BackupInfo, BackendError> {
+    backup_now_impl(&state, retention)
+}
+
+/// List backups for the open book, newest first.
+#[tauri::command(async)]
+pub fn list_backups(
+    state: State<'_, OpenBookState>,
+) -> Result<Vec<crate::backup::BackupInfo>, BackendError> {
+    list_backups_impl(&state)
+}
+
+/// Restore the open book from a backup under its `backups/` folder.
+#[tauri::command(async)]
+pub fn restore_backup(
+    state: State<'_, OpenBookState>,
+    backup_path: String,
+) -> Result<(), BackendError> {
+    restore_backup_impl(&state, &backup_path)
+}
+
 // ---------------------------------------------------------------------------
 // Implementation
 // ---------------------------------------------------------------------------
 
-fn with_conn<T>(
+pub(crate) fn with_conn<T>(
     state: &OpenBookState,
     f: impl FnOnce(&mut Connection) -> Result<T, BackendError>,
 ) -> Result<T, BackendError> {
@@ -207,7 +279,7 @@ fn with_conn<T>(
     f(&mut book.conn)
 }
 
-fn open_book_impl(state: &OpenBookState, path: &str) -> Result<String, BackendError> {
+pub(crate) fn open_book_impl(state: &OpenBookState, path: &str) -> Result<String, BackendError> {
     let book_path = PathBuf::from(path);
     if !book_path.is_absolute() {
         return Err(BackendError::PathNotAbsolute(path.to_string()));
@@ -236,7 +308,20 @@ fn open_book_impl(state: &OpenBookState, path: &str) -> Result<String, BackendEr
 /// Open the connection for a book file: legacy-file guard first (pure reads,
 /// so a rejected file is left byte-identical), then session PRAGMAs, then
 /// pending migrations.
-fn open_book_connection(path: &Path) -> Result<Connection, BackendError> {
+pub(crate) fn open_book_connection(path: &Path) -> Result<Connection, BackendError> {
+    #[cfg(test)]
+    if FORCE_OPEN_BOOK_CONNECTION_FAILURE.with(|flag| {
+        let enabled = flag.get();
+        if enabled {
+            flag.set(false);
+        }
+        enabled
+    }) {
+        return Err(BackendError::RestoreFailed(
+            "forced reopen failure for test".into(),
+        ));
+    }
+
     let mut conn = Connection::open(path)?;
 
     assert_not_legacy_book(&conn, path)?;
@@ -248,11 +333,164 @@ fn open_book_connection(path: &Path) -> Result<Connection, BackendError> {
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
 
+    maybe_backup_before_migration(&conn, path)?;
     run_migrations(&mut conn)?;
     Ok(conn)
 }
 
-fn user_version(conn: &Connection) -> Result<i64, BackendError> {
+fn latest_migration_version() -> i64 {
+    MIGRATIONS[MIGRATIONS.len() - 1].0
+}
+
+fn has_pending_migrations(conn: &Connection) -> Result<bool, BackendError> {
+    Ok(user_version(conn)? < latest_migration_version())
+}
+
+fn is_fresh_book(conn: &Connection) -> Result<bool, BackendError> {
+    if user_version(conn)? != 0 {
+        return Ok(false);
+    }
+    for table in APP_TABLES {
+        let exists: bool = conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+            [*table],
+            |row| row.get(0),
+        )?;
+        if exists {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Pre-migration verified backup for existing books with pending migrations.
+fn maybe_backup_before_migration(conn: &Connection, path: &Path) -> Result<(), BackendError> {
+    if !has_pending_migrations(conn)? || is_fresh_book(conn)? {
+        return Ok(());
+    }
+    crate::backup::create_backup(path, crate::backup::DEFAULT_RETENTION, conn)?;
+    Ok(())
+}
+
+pub(crate) fn backup_now_impl(
+    state: &OpenBookState,
+    retention: Option<u32>,
+) -> Result<crate::backup::BackupInfo, BackendError> {
+    let effective = crate::backup::validate_retention(retention)?;
+    let mut guard = state.0.lock().expect("OpenBookState mutex poisoned");
+    let book = guard.as_mut().ok_or(BackendError::NoBookOpen)?;
+    let backup_path = crate::backup::create_backup(&book.path, effective, &book.conn)?;
+    let file_name = backup_path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("backup.db")
+        .to_string();
+    crate::backup::backup_info_from_path(&backup_path, &file_name)
+}
+
+pub(crate) fn list_backups_impl(
+    state: &OpenBookState,
+) -> Result<Vec<crate::backup::BackupInfo>, BackendError> {
+    let guard = state.0.lock().expect("OpenBookState mutex poisoned");
+    let book = guard.as_ref().ok_or(BackendError::NoBookOpen)?;
+    crate::backup::list_backups(&book.path)
+}
+
+pub(crate) fn restore_backup_impl(
+    state: &OpenBookState,
+    backup_path: &str,
+) -> Result<(), BackendError> {
+    let backup_path = PathBuf::from(backup_path);
+    let mut guard = state.0.lock().expect("OpenBookState mutex poisoned");
+
+    let book_path = {
+        let book = guard.as_ref().ok_or(BackendError::NoBookOpen)?;
+        // Step 1 — path must live inside this book's backups/ folder.
+        crate::backup::validate_backup_in_backups_folder(&book.path, &backup_path)?;
+        // Step 2 — open/read probe (magic bytes alone are insufficient).
+        crate::backup::probe_backup_integrity(&backup_path)?;
+        book.path.clone()
+    };
+
+    let safety_backup_path = {
+        let book = guard.as_mut().ok_or(BackendError::NoBookOpen)?;
+        // Step 3 — safety backup of the current live book.
+        crate::backup::create_backup(&book.path, crate::backup::DEFAULT_RETENTION, &book.conn)?
+    };
+
+    // Step 4 — drop the open connection and clear the session slot.
+    *guard = None;
+
+    #[cfg(test)]
+    crate::backup::maybe_seed_stale_wal_for_restore(&book_path);
+
+    let reopen_original = |guard: &mut std::sync::MutexGuard<'_, Option<Book>>,
+                           book_path: &Path,
+                           err: BackendError|
+     -> Result<(), BackendError> {
+        let conn = open_book_connection(book_path)?;
+        **guard = Some(Book {
+            path: book_path.to_path_buf(),
+            conn,
+        });
+        Err(err)
+    };
+
+    if let Err(err) = crate::backup::delete_wal_shm_sidecars(&book_path) {
+        return reopen_original(&mut guard, &book_path, err);
+    }
+
+    // Step 6 — install validated backup over the live book path.
+    if let Err(err) = crate::backup::install_backup_over_book(&backup_path, &book_path) {
+        return reopen_original(&mut guard, &book_path, err);
+    }
+
+    // Step 7 — reopen through the normal path (migrations re-apply when needed).
+    match open_book_connection(&book_path) {
+        Ok(conn) => {
+            *guard = Some(Book {
+                path: book_path,
+                conn,
+            });
+            Ok(())
+        }
+        Err(err) => {
+            let _ = crate::backup::rollback_book_from_backup(&safety_backup_path, &book_path);
+            let conn = open_book_connection(&book_path).map_err(|reopen_err| {
+                BackendError::RestoreFailed(format!(
+                    "{err}; rollback reopen also failed: {reopen_err}"
+                ))
+            })?;
+            *guard = Some(Book {
+                path: book_path,
+                conn,
+            });
+            Err(BackendError::RestoreFailed(err.to_string()))
+        }
+    }
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static FORCE_OPEN_BOOK_CONNECTION_FAILURE: std::cell::Cell<bool> = std::cell::Cell::new(false);
+}
+
+#[cfg(test)]
+pub fn force_next_open_book_connection_failure() {
+    FORCE_OPEN_BOOK_CONNECTION_FAILURE.with(|flag| flag.set(true));
+}
+
+#[cfg(test)]
+pub(crate) fn count_payees(state: &OpenBookState) -> i64 {
+    with_conn(state, |conn| {
+        select_impl(conn, "SELECT COUNT(*) AS n FROM payees", &[])
+    })
+    .expect("count query should succeed")[0]["n"]
+        .as_i64()
+        .expect("count should be an integer")
+}
+
+pub(crate) fn user_version(conn: &Connection) -> Result<i64, BackendError> {
     Ok(conn.query_row("PRAGMA user_version", [], |row| row.get(0))?)
 }
 
@@ -342,11 +580,13 @@ fn column_value_to_json(value: ValueRef<'_>, column: &str) -> Result<JsonValue, 
     match value {
         ValueRef::Null => Ok(JsonValue::Null),
         ValueRef::Integer(i) => Ok(JsonValue::from(i)),
-        ValueRef::Real(f) => serde_json::Number::from_f64(f).map(JsonValue::Number).ok_or_else(|| {
-            BackendError::Sqlite(format!(
-                "column {column} holds a non-finite REAL value that JSON cannot represent"
-            ))
-        }),
+        ValueRef::Real(f) => serde_json::Number::from_f64(f)
+            .map(JsonValue::Number)
+            .ok_or_else(|| {
+                BackendError::Sqlite(format!(
+                    "column {column} holds a non-finite REAL value that JSON cannot represent"
+                ))
+            }),
         ValueRef::Text(bytes) => match std::str::from_utf8(bytes) {
             Ok(s) => Ok(JsonValue::from(s)),
             Err(e) => Err(BackendError::Sqlite(format!(
@@ -359,7 +599,7 @@ fn column_value_to_json(value: ValueRef<'_>, column: &str) -> Result<JsonValue, 
     }
 }
 
-fn select_impl(
+pub(crate) fn select_impl(
     conn: &Connection,
     sql: &str,
     params: &[JsonValue],
@@ -380,7 +620,7 @@ fn select_impl(
     Ok(out)
 }
 
-fn execute_impl(
+pub(crate) fn execute_impl(
     conn: &Connection,
     sql: &str,
     params: &[JsonValue],
@@ -423,12 +663,14 @@ mod tests {
     /// The `user_version` a fully migrated book reports.
     const LATEST_VERSION: i64 = MIGRATIONS[MIGRATIONS.len() - 1].0;
 
-    /// Tables migration 0001–0006 must leave behind.
+    /// Tables after all shipped migrations (0001–0008).
     const EXPECTED_TABLES: &[&str] = &[
         "accounts",
         "categories",
+        "gnucash_matches",
         "import_log",
         "payees",
+        "payment_exports",
         "payments",
         "recurring_bill_suggestion_dismissals",
         "recurring_bills",
@@ -445,10 +687,8 @@ mod tests {
                 .duration_since(UNIX_EPOCH)
                 .expect("time went backwards")
                 .as_nanos();
-            let root = std::env::temp_dir().join(format!(
-                "fin-app-db-{label}-{nanos}-{}",
-                std::process::id()
-            ));
+            let root = std::env::temp_dir()
+                .join(format!("fin-app-db-{label}-{nanos}-{}", std::process::id()));
             let path = root.join("book.db");
             Self { root, path }
         }
@@ -526,7 +766,7 @@ mod tests {
             LATEST_VERSION,
             "fresh book should be migrated to the latest user_version"
         );
-        assert_eq!(LATEST_VERSION, 7, "latest migration should be version 7");
+        assert_eq!(LATEST_VERSION, 8, "latest migration should be version 8");
         assert_eq!(table_names(&conn), EXPECTED_TABLES);
         assert!(
             index_names(&conn).contains(&"idx_payments_account_id".to_string()),
@@ -715,7 +955,13 @@ mod tests {
             execute_impl(
                 conn,
                 "INSERT INTO scratch (a, b, c, d, e) VALUES (?, ?, ?, ?, ?)",
-                &[json!(null), json!(4242), json!(1.5), json!("text"), json!(true)],
+                &[
+                    json!(null),
+                    json!(4242),
+                    json!(1.5),
+                    json!("text"),
+                    json!(true),
+                ],
             )
         })
         .unwrap();
@@ -764,7 +1010,13 @@ mod tests {
                 conn,
                 "INSERT INTO payments (payee_id, account_id, date, amount_cents, source)
                  VALUES (?, ?, ?, ?, ?)",
-                &[json!(999), json!(999), json!("2026-01-01"), json!(1250), json!("manual")],
+                &[
+                    json!(999),
+                    json!(999),
+                    json!("2026-01-01"),
+                    json!(1250),
+                    json!("manual"),
+                ],
             )
         })
         .expect_err("dangling payee_id/account_id must violate FK constraints");
@@ -863,7 +1115,11 @@ mod tests {
             other => panic!("expected BatchStatementFailed, got: {other}"),
         }
 
-        assert_eq!(count(&state, "payees"), 0, "rollback must undo statements 1-2");
+        assert_eq!(
+            count(&state, "payees"),
+            0,
+            "rollback must undo statements 1-2"
+        );
         assert_eq!(count(&state, "payments"), 0);
     }
 
@@ -871,7 +1127,11 @@ mod tests {
     fn batch_with_hundreds_of_statements_commits_all_rows_in_one_call() {
         let book = TempBook::new("batchbig");
         let state = open_session(&book.path_str());
-        assert_eq!(count(&state, "payees"), 0, "row-count probe before the batch");
+        assert_eq!(
+            count(&state, "payees"),
+            0,
+            "row-count probe before the batch"
+        );
 
         const STATEMENT_COUNT: usize = 500;
         let statements: Vec<BatchStatement> = (0..STATEMENT_COUNT)
@@ -922,7 +1182,10 @@ mod tests {
             .expect_err("statement 400 must fail the whole batch");
         match &err {
             BackendError::BatchStatementFailed { index, message } => {
-                assert_eq!(*index, FAILING_INDEX, "error must name statement {FAILING_INDEX}");
+                assert_eq!(
+                    *index, FAILING_INDEX,
+                    "error must name statement {FAILING_INDEX}"
+                );
                 assert!(
                     message.contains("no such table"),
                     "error must carry the SQLite message, got: {message}"
@@ -1095,6 +1358,9 @@ mod tests {
             select_impl(conn, "SELECT id, name FROM payees ORDER BY id", &[])
         })
         .unwrap();
-        assert_eq!(rows_before, rows_after, "content must be unchanged after rollback");
+        assert_eq!(
+            rows_before, rows_after,
+            "content must be unchanged after rollback"
+        );
     }
 }

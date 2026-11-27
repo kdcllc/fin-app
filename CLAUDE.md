@@ -1,6 +1,6 @@
 # fin-app — project instructions
 
-fin-app is a Tauri 2.x cross-platform desktop personal-finance app: React and TypeScript for the UI, a TypeScript core data-access layer over SQLite (`tauri-plugin-sql`), and Rust commands for xlsx parsing (`calamine`) and GnuCash file access.
+fin-app is a Tauri 2.x cross-platform desktop personal-finance app: React and TypeScript for the UI, a TypeScript core data-access layer over SQLite (app-owned `rusqlite` backend in `src-tauri/src/db.rs`), and Rust commands for xlsx parsing (`calamine`) and GnuCash file access.
 
 ## Non-negotiables
 

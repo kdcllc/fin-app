@@ -6,9 +6,11 @@
  */
 import { LazyStore } from "@tauri-apps/plugin-store";
 
-/** Placeholder — automatic backups arrive in a later milestone. */
 export interface BackupPreferences {
   enabled: boolean;
+  retention: number;
+  intervalDays: number;
+  lastBackupAt: string | null;
 }
 
 export interface AppSettings {
@@ -16,24 +18,43 @@ export interface AppSettings {
   bookPath: string | null;
   /** Year the bills grid opens on; null means the current year. */
   defaultYear: number | null;
-  /** Backup preferences (placeholder for a later milestone). */
   backups: BackupPreferences;
 }
 
-export const DEFAULT_BACKUPS: BackupPreferences = { enabled: false };
+export const DEFAULT_BACKUPS: BackupPreferences = {
+  enabled: true,
+  retention: 20,
+  intervalDays: 7,
+  lastBackupAt: null,
+};
 
 const store = new LazyStore("settings.json");
+
+/** Merge persisted backup fields with defaults; tolerates legacy `{ enabled }`-only stores. */
+export function normalizeBackups(
+  stored: Partial<BackupPreferences> | null | undefined,
+): BackupPreferences {
+  if (stored == null) {
+    return { ...DEFAULT_BACKUPS };
+  }
+  return {
+    enabled: stored.enabled ?? DEFAULT_BACKUPS.enabled,
+    retention: stored.retention ?? DEFAULT_BACKUPS.retention,
+    intervalDays: stored.intervalDays ?? DEFAULT_BACKUPS.intervalDays,
+    lastBackupAt: stored.lastBackupAt ?? DEFAULT_BACKUPS.lastBackupAt,
+  };
+}
 
 export async function loadSettings(): Promise<AppSettings> {
   const [bookPath, defaultYear, backups] = await Promise.all([
     store.get<string>("bookPath"),
     store.get<number>("defaultYear"),
-    store.get<BackupPreferences>("backups"),
+    store.get<Partial<BackupPreferences>>("backups"),
   ]);
   return {
     bookPath: bookPath ?? null,
     defaultYear: defaultYear ?? null,
-    backups: backups ?? { ...DEFAULT_BACKUPS },
+    backups: normalizeBackups(backups),
   };
 }
 

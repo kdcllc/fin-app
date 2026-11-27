@@ -29,4 +29,6 @@ sha2 = "0.10"
 rusqlite = { version = "0.40.1", features = ["bundled"] }
 printpdf = { version = "0.12.5", features = ["png"] }
 rust_xlsxwriter = "0.98.1"
+tauri-plugin-updater = "2.10.1"
+tauri-plugin-process = "2.3.1"
 

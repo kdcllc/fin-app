@@ -176,6 +176,68 @@ export type {
   ReviewedImportCommitResult,
 };
 export { openRustSqliteDatabase } from "./adapters/rust-sqlite";
+export { SUPPORTED_GNUCASH_RESAVE } from "./gnucash-types";
+export type {
+  GnucashAccount,
+  GnucashAccountType,
+  GnucashBookProbe,
+  GnucashSplit,
+  GnucashTransaction,
+  GnucashTransactionError,
+  GnucashTransactionList,
+} from "./gnucash-types";
+export {
+  GnucashMappingConflictError,
+  applyAccountMapping,
+  applyCategoryMapping,
+  clearMapping,
+  mappingStatus,
+  suggestAccountMappings,
+  suggestCategoryMappings,
+} from "./gnucash-mapping";
+export type { MappingKind, MappingStatus, MappingSuggestion } from "./gnucash-mapping";
+export { commitGnucashImport, planGnucashImport } from "./gnucash-import";
+export type {
+  GnucashImportApproval,
+  GnucashImportFieldDiff,
+  GnucashImportOptions,
+  GnucashImportPlan,
+  GnucashImportPlanMergeCandidateRow,
+  GnucashImportPlanNewRow,
+  GnucashImportPlanUnchangedRow,
+  GnucashImportPlanUnmappableRow,
+  GnucashImportPlanUnreadableRow,
+  GnucashImportPlanUpdatedRow,
+  GnucashImportResult,
+} from "./gnucash-import";
+export {
+  buildCsv,
+  buildQif,
+  listExportablePayments,
+  recordExport,
+  validateForExport,
+} from "./gnucash-export";
+export type {
+  ExportBlocker,
+  ExportBuildInput,
+  ExportFilters,
+  ExportHistoryEntry,
+  ExportValidation,
+  ExportablePayment,
+} from "./gnucash-export";
+export {
+  clearOverride,
+  reconcile,
+  setManualMatch,
+  setManualUnmatch,
+  summarize,
+} from "./gnucash-reconcile";
+export type {
+  ReconcileMatchedPair,
+  ReconcileOptions,
+  ReconcileResult,
+  ReconcileSummary,
+} from "./gnucash-reconcile";
 
 /** Every repository, wired to one database connection. */
 export interface Repositories {

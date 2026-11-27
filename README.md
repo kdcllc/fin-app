@@ -6,6 +6,17 @@ bill-pay workbook and integrates with GnuCash: multi-year expense tracking, repo
 machine — no cloud, no server. Built with Tauri 2.x (Rust core + React/TypeScript UI over
 SQLite), the stack recommended in [docs/RESEARCH.md](docs/RESEARCH.md) §3.
 
+## Features
+
+- **GnuCash integration** — on the GnuCash page: link a sqlite3 book; map fin-app accounts
+  and categories to GnuCash accounts; import transactions with a review step; export payments
+  as QIF or CSV; reconcile against GnuCash.
+- **Automatic backups** — Settings configures timestamped book backups (interval and
+  retention); back up on demand or restore from prior backups.
+- **Auto-updates** — Settings checks for updates, downloads and installs them, and
+  prompts to restart; release publishing is documented in
+  [docs/RELEASING.md](docs/RELEASING.md).
+
 ## Development environment
 
 ### Prerequisites (all platforms)
@@ -86,7 +97,9 @@ lookup error above and restart using the command in this section.
 - `src/` — React + TypeScript frontend
 - `src-tauri/` — Rust backend (Tauri commands, config in `src-tauri/tauri.conf.json`)
 - `docs/RESEARCH.md` — research report the project plan is based on
-- `goals/` — goal and task breakdown driving implementation
+- `docs/RELEASING.md` — release runbook (minisign-signed updater artifacts; OS installers unsigned)
+- `_goals/` — active goal and task breakdown driving implementation
+- `goals/` — legacy pre-kit goal archive (read-only history)
 
 > Note: `*.xlsx` files are git-ignored on purpose — the source workbook contains real
 > personal financial data and must never be committed.

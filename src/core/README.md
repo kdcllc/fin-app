@@ -12,7 +12,12 @@ etc. are forbidden and blocked by the `no-restricted-imports` rule in
 `eslint.config.js`. Consequences:
 
 - **All SQL lives in `core/repositories/`** — UI components never issue
-  queries, never import a SQL driver, never see a connection.
+  queries, never import a SQL driver, never see a connection. Exceptions:
+  `import-review.ts` (pre-existing precedent) and the GnuCash
+  `gnucash-import.ts` / `gnucash-export.ts` / `gnucash-reconcile.ts` modules,
+  which embed module-level SQL for their own tables (`payment_exports`,
+  `gnucash_matches`, added by migration `0008_gnucash_integration.sql`) and
+  cross-entity queries no repository covers.
 - Business logic lives in TypeScript over the app-owned Rust SQLite backend
   (`src-tauri/src/db.rs`, a dumb executor). Other Rust commands are reserved
   for what genuinely needs Rust (xlsx parsing via `calamine`, GnuCash file
@@ -25,9 +30,14 @@ etc. are forbidden and blocked by the `no-restricted-imports` rule in
 | `db.ts`                   | The seam: minimal `Database` interface (`execute`/`select`/`batch`, `?` placeholders only).   |
 | `entities.ts`             | Entity types mirroring `src-tauri/migrations/0001_schema_v1.sql` field-for-field.             |
 | `errors.ts`               | Typed errors (`ForeignKeyViolationError`) + driver-error mapping.                             |
-| `repositories/`           | One repository per entity; the only home of SQL strings.                                      |
+| `repositories/`           | One repository per entity; the only home of SQL strings (see Boundary rule exceptions).       |
+| `gnucash-types.ts`        | Frozen GnuCash IPC types + `SUPPORTED_GNUCASH_RESAVE`.                                        |
+| `gnucash-mapping.ts`      | Account/category ↔ GnuCash GUID suggestions + apply via repositories.                         |
+| `gnucash-import.ts`       | Review-plan + transactional commit of GnuCash transactions as payments.                      |
+| `gnucash-export.ts`       | QIF/CSV builders + `payment_exports` tracking.                                                |
+| `gnucash-reconcile.ts`    | Three-bucket reconciliation + `gnucash_matches` manual overrides.                             |
 | `adapters/rust-sqlite.ts` | Production adapter over the Rust backend commands (`db_select`/`db_execute`/`db_batch`).      |
-| `index.ts`                | Public entry: types, errors, `createRepositories`, `openRustSqliteDatabase`.                  |
+| `index.ts`                | Public entry: types, errors, `createRepositories`, `openRustSqliteDatabase`; re-exports GnuCash modules. |
 
 Two adapters satisfy the `Database` seam: the rust-sqlite one above (wired by
 the app), and a better-sqlite3 adapter in `tests/support/test-db.ts` (wired by

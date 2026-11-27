@@ -1,4 +1,6 @@
+mod backup;
 mod db;
+mod gnucash_reader;
 mod report_csv;
 mod report_pdf;
 mod report_xlsx;
@@ -29,20 +31,35 @@ pub(crate) fn materialize_book_file(book_path: &Path) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_store::Builder::new().build())
+        .plugin(tauri_plugin_store::Builder::new().build());
+
+    #[cfg(desktop)]
+    {
+        builder = builder
+            .plugin(tauri_plugin_updater::Builder::new().build())
+            .plugin(tauri_plugin_process::init());
+    }
+
+    builder
         .manage(db::OpenBookState::new())
         .invoke_handler(tauri::generate_handler![
             db::open_book,
             db::db_select,
             db::db_execute,
             db::db_batch,
+            db::backup_now,
+            db::list_backups,
+            db::restore_backup,
             xlsx_reader::read_xlsx_workbook_raw,
             report_pdf::export_report_pdf,
             report_csv::export_report_csv,
-            report_xlsx::export_report_xlsx
+            report_xlsx::export_report_xlsx,
+            gnucash_reader::gnucash_probe_book,
+            gnucash_reader::gnucash_list_accounts,
+            gnucash_reader::gnucash_list_transactions
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -60,7 +77,10 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("time went backwards")
             .as_nanos();
-        std::env::temp_dir().join(format!("fin-app-register-book-{nanos}-{}", std::process::id()))
+        std::env::temp_dir().join(format!(
+            "fin-app-register-book-{nanos}-{}",
+            std::process::id()
+        ))
     }
 
     #[test]
@@ -82,7 +102,8 @@ mod tests {
         let book_path = root.join("existing").join("fin-app.db");
 
         materialize_book_file(&book_path).expect("first materialization should succeed");
-        materialize_book_file(&book_path).expect("second materialization should reopen existing file");
+        materialize_book_file(&book_path)
+            .expect("second materialization should reopen existing file");
 
         assert!(book_path.exists(), "expected db file to still exist");
 
