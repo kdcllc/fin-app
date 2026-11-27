@@ -103,3 +103,10 @@ lookup error above and restart using the command in this section.
 
 > Note: `*.xlsx` files are git-ignored on purpose — the source workbook contains real
 > personal financial data and must never be committed.
+
+## License
+
+[MIT](LICENSE) © 2026 King David Consulting LLC.
+
+Some skills under `.claude/skills/` are vendored from third-party projects (see
+`skills-lock.json` for sources) and remain under their original licenses.
