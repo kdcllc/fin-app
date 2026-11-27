@@ -23,8 +23,6 @@ src-tauri/target/
 .claude/settings.local.json
 
 # Orchestration-kit runtime scratch — never commit
-_goals/breaker-state.json
-_goals/breaker-state.json.tmp.*
 .loop-worktrees/
 
 # Editor directories and files
@@ -37,3 +35,11 @@ _goals/breaker-state.json.tmp.*
 *.njsproj
 *.sln
 *.sw?
+_kit/
+_memory/.index/
+_memory/raw/
+_memory/work/
+_memory/loop/breaker-state.json
+_memory/loop/breaker-state.json.tmp.*
+_memory/loop/ledger.jsonl
+_memory/loop/attempts/
