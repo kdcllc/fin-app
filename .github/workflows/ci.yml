@@ -107,10 +107,11 @@ jobs:
 
   build-tauri:
     name: Build Tauri (${{ matrix.platform }})
-    # Platform builds run on PRs, pushes to main, and v* tags. They are the most
-    # expensive jobs (macOS bills at 10x, Windows at 2x); PR/push builds are
-    # unsigned and publish nothing — they prove all three platforms still build
-    # and bundle. A release is cut by pushing a v* tag.
+    # Platform builds run on PRs, pushes to main, and v* tags. This repo is
+    # public, so standard GitHub-hosted runners (incl. macOS/Windows) cost no
+    # Actions minutes. PR/push builds are unsigned and publish nothing — they
+    # prove all three platforms still build and bundle. A release is cut by
+    # pushing a v* tag.
     needs:
       - quality-js
       - quality-rust
@@ -200,21 +201,17 @@ jobs:
       - name: Install JS dependencies
         run: npm ci --ignore-scripts
 
-      # Tag releases require two secrets configured before push; see docs/RELEASING.md.
+      # Tag releases require the signing secret configured before push; see docs/RELEASING.md.
       - name: Preflight release secrets
         if: github.ref_type == 'tag'
         shell: bash
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          RELEASES_REPO_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
         run: |
           set -euo pipefail
           missing=""
           if [ -z "${TAURI_SIGNING_PRIVATE_KEY}" ]; then
             missing="${missing} TAURI_SIGNING_PRIVATE_KEY"
-          fi
-          if [ -z "${RELEASES_REPO_TOKEN}" ]; then
-            missing="${missing} RELEASES_REPO_TOKEN"
           fi
           if [ -n "${missing}" ]; then
             echo "::error::Tag release requires GitHub Actions secrets:${missing}. Configure them before pushing a tag (see docs/RELEASING.md)."
@@ -242,8 +239,9 @@ jobs:
         id: tauri
         uses: tauri-apps/tauri-action@v0
         env:
-          # tauri-action@v0 has no token: input; cross-repo publish uses GITHUB_TOKEN env.
-          GITHUB_TOKEN: ${{ github.ref_type == 'tag' && secrets.RELEASES_REPO_TOKEN || secrets.GITHUB_TOKEN }}
+          # Releases publish to this repo (kdcllc/fin-app) with the workflow's own
+          # GITHUB_TOKEN (contents: write); tauri-action@v0 reads it from env.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ github.ref_type == 'tag' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ github.ref_type == 'tag' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
         with:
@@ -252,9 +250,6 @@ jobs:
           releaseDraft: false
           prerelease: false
           includeUpdaterJson: ${{ github.ref_type == 'tag' }}
-          owner: ${{ github.ref_type == 'tag' && 'kdcllc' || '' }}
-          repo: ${{ github.ref_type == 'tag' && 'fin-app-releases' || '' }}
-          releaseCommitish: ${{ github.ref_type == 'tag' && 'main' || '' }}
           # tauri-action appends args to `tauri build`; --config path is resolved
           # relative to the repo root (tauri-action default projectPath `.`). Tag builds use committed config as-is.
           args: ${{ github.ref_type != 'tag' && '--config src-tauri/ci-updater-off.json' || '' }}
@@ -305,12 +300,12 @@ jobs:
           fi
           echo "Installers present for Linux, Windows, and macOS."
 
-      - name: Download latest.json from fin-app-releases
+      - name: Download latest.json from this repo's release
         if: github.ref_type == 'tag'
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
-          url="https://github.com/kdcllc/fin-app-releases/releases/download/${tag}/latest.json"
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/latest.json"
           echo "Fetching ${url}"
           curl -fsSL -o latest.json "${url}"
 
