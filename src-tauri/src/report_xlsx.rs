@@ -17,8 +17,14 @@ pub struct ReportXlsxRow {
     pub cells: Vec<XlsxCell>,
 }
 
+/// `rename_all` renames only the variant tags (`kind`); `rename_all_fields` is what
+/// maps the UI's camelCase fields (`amountCents`) onto the Rust snake_case ones.
 #[derive(Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 pub enum XlsxCell {
     Text { value: String },
     Date { iso: String },
@@ -520,6 +526,56 @@ mod tests {
             panic!("expected grand total cents");
         };
         assert_eq!(*grand_total, row_and_grand_total);
+
+        let _ = fs::remove_file(output);
+    }
+
+    /// The exact `invoke("export_report_xlsx", …)` arguments the UI sends, pinned by
+    /// tests/report-xlsx-ipc.test.ts. Deserializing them here catches field-name drift
+    /// between src/report-xlsx.ts and this module (B81: `amountCents` vs `amount_cents`).
+    const IPC_PAYLOAD: &str = include_str!("../../tests/fixtures/report/xlsx-ipc-payload.json");
+
+    fn ipc_fixture_spec(key: &str) -> ReportXlsxSpec {
+        let payload: serde_json::Value =
+            serde_json::from_str(IPC_PAYLOAD).expect("fixture should be valid JSON");
+        serde_json::from_value(payload[key]["spec"].clone())
+            .expect("UI payload should deserialize into ReportXlsxSpec")
+    }
+
+    #[test]
+    fn ipc_payload_fixture_deserializes_every_cell_kind() {
+        let payments = ipc_fixture_spec("payments");
+        assert_eq!(payments.sheet_name, "Payments");
+        let cells = &payments.rows[0].cells;
+        assert!(matches!(&cells[0], XlsxCell::Date { iso } if iso == "2026-02-14"));
+        assert!(matches!(&cells[1], XlsxCell::Text { value } if value == "Payee One"));
+        assert!(matches!(
+            cells[4],
+            XlsxCell::Cents {
+                amount_cents: -4567
+            }
+        ));
+
+        let table = ipc_fixture_spec("table");
+        let cells = &table.rows[0].cells;
+        assert!(matches!(
+            cells[1],
+            XlsxCell::Cents {
+                amount_cents: 12_345
+            }
+        ));
+        assert!(matches!(cells[2], XlsxCell::Integer { value: 3 }));
+    }
+
+    #[test]
+    fn ipc_payload_fixture_exports_exact_cents() {
+        let output = unique_test_path("ipc-payments.xlsx");
+        export_report_xlsx(output.display().to_string(), ipc_fixture_spec("payments"))
+            .expect("export of the UI payload should succeed");
+
+        let matrix = read_sheet_matrix(&output);
+        assert_eq!(cell_as_string(&matrix[1][1]), "Payee One");
+        assert_eq!(cell_as_cents(&matrix[1][4]), -4567);
 
         let _ = fs::remove_file(output);
     }
