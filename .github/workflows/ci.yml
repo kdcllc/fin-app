@@ -17,7 +17,72 @@ on:
 permissions:
   contents: write
 
+# Pushes to main run one at a time so two merges can never race to publish the same
+# version; superseded PR runs are cancelled.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  release-meta:
+    name: Release metadata
+    runs-on: ubuntu-latest
+    outputs:
+      is_release: ${{ steps.meta.outputs.is_release }}
+      tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # A release is published when (a) a v* tag is pushed, or (b) a push to main carries
+      # a version (src-tauri/tauri.conf.json) that has no v<version> tag yet — so merging
+      # a PR that bumps the version cuts the release automatically. The three version
+      # files must agree on every run.
+      - name: Decide whether this run publishes a release
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          conf=$(python3 -c "import json;print(json.load(open('src-tauri/tauri.conf.json'))['version'])")
+          pkg=$(python3 -c "import json;print(json.load(open('package.json'))['version'])")
+          cargo=$(python3 -c "import re;print(re.search(r'(?m)^version\s*=\s*\"([^\"]+)\"', open('src-tauri/Cargo.toml').read()).group(1))")
+          if [ "$conf" != "$pkg" ] || [ "$conf" != "$cargo" ]; then
+            echo "::error::Version mismatch: tauri.conf.json=$conf package.json=$pkg Cargo.toml=$cargo (bump all three together)."
+            exit 1
+          fi
+          is_release=false
+          tag="v${conf}"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tag="${GITHUB_REF_NAME}"
+            if [ "$tag" != "v${conf}" ]; then
+              echo "::error::Tag $tag does not match the app version v${conf}."
+              exit 1
+            fi
+            is_release=true
+          elif [ "${GITHUB_EVENT_NAME}" = "push" ] && [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+            # --exit-code: 0 = tag exists, 2 = no such tag; anything else is a lookup failure
+            # and must not be mistaken for "no tag" (that would re-publish).
+            set +e
+            git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null
+            rc=$?
+            set -e
+            if [ "$rc" -eq 0 ]; then
+              echo "Tag ${tag} already exists — no release for this push (bump the version to cut one)."
+            elif [ "$rc" -eq 2 ]; then
+              is_release=true
+              echo "Version ${conf} has no tag yet — this push to main publishes ${tag}."
+            else
+              echo "::error::Could not look up tag ${tag} on origin (git ls-remote exit ${rc})."
+              exit 1
+            fi
+          fi
+          {
+            echo "is_release=${is_release}"
+            echo "tag=${tag}"
+            echo "version=${conf}"
+          } >> "$GITHUB_OUTPUT"
+
   quality-js:
     name: Lint, Typecheck, and Vitest
     runs-on: ubuntu-latest
@@ -107,12 +172,14 @@ jobs:
 
   build-tauri:
     name: Build Tauri (${{ matrix.platform }})
-    # Platform builds run on PRs, pushes to main, and v* tags. This repo is
+    # Platform builds run on PRs, pushes to main, and v* tags; release mode (signing +
+    # publishing) is decided by the release-meta job (needs.release-meta.outputs.is_release). This repo is
     # public, so standard GitHub-hosted runners (incl. macOS/Windows) cost no
     # Actions minutes. PR/push builds are unsigned and publish nothing — they
     # prove all three platforms still build and bundle. A release is cut by
     # pushing a v* tag.
     needs:
+      - release-meta
       - quality-js
       - quality-rust
     permissions:
@@ -120,13 +187,13 @@ jobs:
     # latest.json race (tag builds only): each matrix job runs tauri-action with
     # includeUpdaterJson, which read-merge-writes latest.json on the GitHub
     # Release. Parallel jobs overwrite each other and can drop platform entries.
-    # Strategy: serialized release upload — max-parallel: 1 when github.ref_type
-    # is tag so each platform finishes publishing before the next starts. PR/push
+    # Strategy: serialized release upload — max-parallel: 1 when this run publishes a
+    # release, so each platform finishes publishing before the next starts. Other
     # builds publish nothing and stay fully parallel. A latest.json still missing
     # Linux, Windows, or macOS fails the verify-release job (not accepted).
     strategy:
       fail-fast: false
-      max-parallel: ${{ github.ref_type == 'tag' && 1 || 3 }}
+      max-parallel: ${{ needs.release-meta.outputs.is_release == 'true' && 1 || 3 }}
       matrix:
         platform:
           # Pinned to 22.04 (not -latest): binaries link against the build
@@ -203,7 +270,7 @@ jobs:
 
       # Tag releases require the signing secret configured before push; see docs/RELEASING.md.
       - name: Preflight release secrets
-        if: github.ref_type == 'tag'
+        if: needs.release-meta.outputs.is_release == 'true'
         shell: bash
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -223,8 +290,8 @@ jobs:
       # Tauri v2 fails the bundle when a pubkey exists but TAURI_SIGNING_PRIVATE_KEY
       # is absent. PR/push builds have no signing key, so overlay the flag off via a
       # small JSON file (not inline --config JSON) to avoid Windows/PowerShell quoting.
-      - name: Write CI updater overlay (non-tag builds)
-        if: github.ref_type != 'tag'
+      - name: Write CI updater overlay (non-release builds)
+        if: needs.release-meta.outputs.is_release != 'true'
         shell: bash
         run: |
           cat > src-tauri/ci-updater-off.json <<'EOF'
@@ -242,17 +309,20 @@ jobs:
           # Releases publish to this repo (kdcllc/fin-app) with the workflow's own
           # GITHUB_TOKEN (contents: write); tauri-action@v0 reads it from env.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ github.ref_type == 'tag' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ github.ref_type == 'tag' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ needs.release-meta.outputs.is_release == 'true' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ needs.release-meta.outputs.is_release == 'true' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
         with:
-          tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
-          releaseName: ${{ github.ref_type == 'tag' && format('fin-app {0}', github.ref_name) || '' }}
+          tagName: ${{ needs.release-meta.outputs.is_release == 'true' && needs.release-meta.outputs.tag || '' }}
+          releaseName: ${{ needs.release-meta.outputs.is_release == 'true' && format('fin-app {0}', needs.release-meta.outputs.tag) || '' }}
           releaseDraft: false
           prerelease: false
-          includeUpdaterJson: ${{ github.ref_type == 'tag' }}
+          includeUpdaterJson: ${{ needs.release-meta.outputs.is_release == 'true' }}
+          # On a push to main the tag does not exist yet: the release is created on this
+          # exact commit, which creates the tag. On a tag push the tag already points here.
+          releaseCommitish: ${{ needs.release-meta.outputs.is_release == 'true' && github.sha || '' }}
           # tauri-action appends args to `tauri build`; --config path is resolved
           # relative to the repo root (tauri-action default projectPath `.`). Tag builds use committed config as-is.
-          args: ${{ github.ref_type != 'tag' && '--config src-tauri/ci-updater-off.json' || '' }}
+          args: ${{ needs.release-meta.outputs.is_release != 'true' && '--config src-tauri/ci-updater-off.json' || '' }}
 
       - name: Upload OS installers
         if: ${{ !cancelled() }}
@@ -274,18 +344,19 @@ jobs:
     # uploaded installer artifacts must include all three platforms.
     name: Verify release artifacts
     needs:
+      - release-meta
       - build-tauri
     runs-on: ubuntu-latest
     steps:
-      - name: Download installer artifacts (non-tag builds)
-        if: github.ref_type != 'tag'
+      - name: Download installer artifacts (non-release builds)
+        if: needs.release-meta.outputs.is_release != 'true'
         uses: actions/download-artifact@v4
         with:
           pattern: fin-app-*
           path: installers
 
-      - name: Assert Linux, Windows, and macOS installers present (non-tag builds)
-        if: github.ref_type != 'tag'
+      - name: Assert Linux, Windows, and macOS installers present (non-release builds)
+        if: needs.release-meta.outputs.is_release != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -301,16 +372,18 @@ jobs:
           echo "Installers present for Linux, Windows, and macOS."
 
       - name: Download latest.json from this repo's release
-        if: github.ref_type == 'tag'
+        if: needs.release-meta.outputs.is_release == 'true'
+        env:
+          TAG: ${{ needs.release-meta.outputs.tag }}
         run: |
           set -euo pipefail
-          tag="${GITHUB_REF_NAME}"
+          tag="${TAG}"
           url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/latest.json"
           echo "Fetching ${url}"
           curl -fsSL -o latest.json "${url}"
 
       - name: Assert Linux, Windows, and macOS platforms present
-        if: github.ref_type == 'tag'
+        if: needs.release-meta.outputs.is_release == 'true'
         run: |
           set -euo pipefail
           python3 <<'PY'
