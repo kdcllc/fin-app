@@ -2,8 +2,9 @@
 
 This runbook covers publishing a signed release of fin-app. Releases are published
 to this repo, [`kdcllc/fin-app`](https://github.com/kdcllc/fin-app/releases) (public):
-tag builds sign updater artifacts and attach installers, `.sig` files, and
-`latest.json` to the GitHub Release for the tag.
+release runs (a version bump merged to `main`, or a `v*` tag push — see [Release flow](#release-flow))
+sign updater artifacts and attach installers, `.sig` files, and `latest.json` to the
+GitHub Release for the `v<version>` tag.
 
 ## One-time setup checklist
 
@@ -16,8 +17,9 @@ Complete these steps **once** before your first tag release:
 2. **Confirm the updater endpoint** — `src-tauri/tauri.conf.json` must point at
    `https://github.com/kdcllc/fin-app/releases/latest/download/latest.json`.
 3. **Store the signing secret** in the `fin-app` repo
-   (Settings → Secrets and variables → Actions). It is **required before pushing
-   any `v*` tag**; a missing secret fails the pipeline loudly.
+   (Settings → Secrets and variables → Actions). It is **required before merging
+   a version bump to `main` or pushing any `v*` tag**; a missing secret fails the release
+   run loudly.
 4. **Back up the minisign private key** — see [Private key backup](#private-key-backup).
 
 ## Required GitHub Actions secrets
@@ -45,7 +47,7 @@ updater public key. Any build that produces updater artifacts (including
 configured but no signing key is present.
 
 In CI, the platform build jobs (`build-tauri`) run on PRs, pushes to `main`, and
-`v*` tags. Non-tag builds disable updater artifacts via a workflow overlay
+`v*` tags. Non-release builds disable updater artifacts via a workflow overlay
 (`src-tauri/ci-updater-off.json`, written at build time) so they never need the
 signing secret, publish nothing, and run the three platforms in parallel; their
 installers are uploaded as workflow artifacts and `verify-release` checks that
@@ -73,25 +75,29 @@ If you **regenerate** the keypair:
 
 ## Release flow
 
-1. **Bump the version** (same semver in both files):
-   - `src-tauri/tauri.conf.json` → `"version"`
-   - `package.json` → `"version"`
-2. **Commit** the version bump to `main`.
-3. **Create an annotated tag** matching the version, e.g. `v0.1.2`:
-   ```bash
-   git tag -a v0.1.2 -m "fin-app v0.1.2"
-   ```
-4. **Push the tag** (triggers CI on the private repo):
-   ```bash
-   git push origin v0.1.2
-   ```
+Releases are cut **automatically when a version bump is merged to `main`**:
 
-CI then:
+1. **Bump the version** in a PR — the same semver in all three files (CI fails on a
+   mismatch):
+   - `src-tauri/tauri.conf.json` → `"version"`
+   - `package.json` → `"version"` (and `package-lock.json`, e.g. `npm version 0.2.1 --no-git-tag-version`)
+   - `src-tauri/Cargo.toml` → `version` (and the `fin-app` entry in `src-tauri/Cargo.lock`)
+2. **Merge the PR to `main`.** The `release-meta` job reads the version; if no
+   `v<version>` tag exists yet, this run is a release run: it builds and signs on all
+   three platforms and creates the GitHub Release **and the `v<version>` tag** on the
+   merge commit.
+3. A merge that does not change the version (its `v<version>` tag already exists) runs
+   the normal unsigned builds and publishes nothing.
+
+Pushing a `v*` tag by hand still works (e.g. to re-run a release); the tag must equal
+`v<version>` from `tauri.conf.json`, or CI fails.
+
+CI on a release run:
 
 - Runs quality gates (lint, tests, clippy).
-- Builds installers on Linux, Windows, and macOS — on tag builds these jobs are
+- Builds installers on Linux, Windows, and macOS — on release runs these jobs are
   serialized to avoid a `latest.json` race (see workflow comments in
-  `.github/workflows/ci.yml`).
+  `.github/workflows/ci.yml`); pushes to `main` never run concurrently.
 - Signs updater artifacts with the minisign key.
 - Publishes bundles, `.sig` files, and `latest.json` to
   the GitHub Release for the tag on `kdcllc/fin-app`.
