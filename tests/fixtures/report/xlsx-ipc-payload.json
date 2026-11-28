@@ -1,0 +1,37 @@
+{
+  "payments": {
+    "path": "/tmp/fin-app-ipc-contract/payments.xlsx",
+    "spec": {
+      "sheetName": "Payments",
+      "headers": ["Date", "Payee", "Account", "Category", "Amount", "Memo"],
+      "rows": [
+        {
+          "cells": [
+            { "kind": "date", "iso": "2026-02-14" },
+            { "kind": "text", "value": "Payee One" },
+            { "kind": "text", "value": "Checking A" },
+            { "kind": "text", "value": "Utilities" },
+            { "kind": "cents", "amountCents": -4567 },
+            { "kind": "text", "value": "placeholder memo" }
+          ]
+        }
+      ]
+    }
+  },
+  "table": {
+    "path": "/tmp/fin-app-ipc-contract/table.xlsx",
+    "spec": {
+      "sheetName": "Report",
+      "headers": ["Group", "Total", "Count"],
+      "rows": [
+        {
+          "cells": [
+            { "kind": "text", "value": "Utilities" },
+            { "kind": "cents", "amountCents": 12345 },
+            { "kind": "integer", "value": 3 }
+          ]
+        }
+      ]
+    }
+  }
+}
