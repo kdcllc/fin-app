@@ -1,30 +1,79 @@
 import type { Database } from "../db";
-import type { Account, AccountKind, AccountPatch, NewAccount } from "../entities";
+import type {
+  Account,
+  AccountKind,
+  AccountPatch,
+  AccountSubtype,
+  AccountType,
+  NewAccount,
+} from "../entities";
 import { EntityInUseError, ValidationError } from "../errors";
 import { buildUpdate } from "./helpers";
+import { createLedgerRepo, type LedgerRepo } from "./ledger";
 
 interface AccountRow {
   id: number;
   name: string;
-  kind: AccountKind;
+  type: AccountType;
+  subtype: AccountSubtype | null;
+  parent_id: number | null;
   last4: string | null;
   gnucash_guid: string | null;
   archived: 0 | 1;
 }
 
-const COLUMNS = "id, name, kind, last4, gnucash_guid, archived";
+const COLUMNS = "id, name, type, subtype, parent_id, last4, gnucash_guid, archived";
+
+/** Funding accounts: non-placeholder, non-system ASSET and LIABILITY accounts. */
+const FUNDING_FILTER =
+  "placeholder = 0 AND system_role IS NULL AND type IN ('ASSET', 'LIABILITY')";
+
+const KIND_MAP: Record<AccountKind, { type: AccountType; subtype: AccountSubtype }> = {
+  checking: { type: "ASSET", subtype: "bank" },
+  cash: { type: "ASSET", subtype: "cash" },
+  savings: { type: "ASSET", subtype: "savings" },
+  credit: { type: "LIABILITY", subtype: "credit_card" },
+  loan: { type: "LIABILITY", subtype: "loan" },
+};
+
+function deriveKind(type: AccountType, subtype: AccountSubtype | null): AccountKind {
+  switch (subtype) {
+    case "bank":
+      return "checking";
+    case "cash":
+      return "cash";
+    case "savings":
+      return "savings";
+    case "credit_card":
+      return "credit";
+    case "loan":
+      return "loan";
+    default:
+      return type === "LIABILITY" ? "credit" : "checking";
+  }
+}
 
 function toAccount(row: AccountRow): Account {
-  return { ...row, archived: row.archived === 1 };
+  return {
+    id: row.id,
+    name: row.name,
+    kind: deriveKind(row.type, row.subtype),
+    type: row.type,
+    subtype: row.subtype,
+    parent_id: row.parent_id,
+    last4: row.last4,
+    gnucash_guid: row.gnucash_guid,
+    archived: row.archived === 1,
+  };
 }
 
 export interface AccountsRepo {
-  /** Active accounts by default; pass `includeArchived` for the full set. */
+  /** Active funding accounts by default; pass `includeArchived` for the full set. */
   list(options?: { includeArchived?: boolean }): Promise<Account[]>;
-  /** Fetch by id — returns archived accounts too (history stays reachable). */
+  /** Fetch by id — returns archived accounts too; `null` for non-funding accounts. */
   get(id: number): Promise<Account | null>;
   insert(account: NewAccount): Promise<Account>;
-  /** Apply a partial patch; returns the updated row, or null if `id` is unknown. */
+  /** Apply a partial patch; returns the updated row, or null if `id` is not a funding account. */
   update(id: number, patch: AccountPatch): Promise<Account | null>;
   /** Soft-delete: hides from default lists, keeps payment history intact. */
   archive(id: number): Promise<boolean>;
@@ -32,9 +81,15 @@ export interface AccountsRepo {
   delete(id: number): Promise<boolean>;
 }
 
-export function createAccountsRepo(db: Database): AccountsRepo {
+export function createAccountsRepo(
+  db: Database,
+  ledger: LedgerRepo = createLedgerRepo(db),
+): AccountsRepo {
   async function get(id: number): Promise<Account | null> {
-    const rows = await db.select<AccountRow>(`SELECT ${COLUMNS} FROM accounts WHERE id = ?`, [id]);
+    const rows = await db.select<AccountRow>(
+      `SELECT ${COLUMNS} FROM accounts WHERE id = ? AND ${FUNDING_FILTER}`,
+      [id],
+    );
     return rows.length > 0 ? toAccount(rows[0]) : null;
   }
 
@@ -61,11 +116,17 @@ export function createAccountsRepo(db: Database): AccountsRepo {
     return rows[0]?.count ?? 0;
   }
 
+  async function rootIdFor(type: AccountType): Promise<number> {
+    const root = await ledger.getSystemAccount(type === "ASSET" ? "root_asset" : "root_liability");
+    if (root === null) throw new ValidationError(`The ${type} root account is missing.`);
+    return root.id;
+  }
+
   return {
     async list({ includeArchived = false } = {}) {
-      const where = includeArchived ? "" : " WHERE archived = 0";
+      const archived = includeArchived ? "" : " AND archived = 0";
       const rows = await db.select<AccountRow>(
-        `SELECT ${COLUMNS} FROM accounts${where} ORDER BY name, id`,
+        `SELECT ${COLUMNS} FROM accounts WHERE ${FUNDING_FILTER}${archived} ORDER BY name, id`,
       );
       return rows.map(toAccount);
     },
@@ -74,42 +135,72 @@ export function createAccountsRepo(db: Database): AccountsRepo {
 
     async insert(account) {
       assertValidNewAccount(account);
-      const result = await db.execute(
-        "INSERT INTO accounts (name, kind, last4, gnucash_guid) VALUES (?, ?, ?, ?)",
-        [account.name, account.kind, account.last4 ?? null, account.gnucash_guid ?? null],
-      );
-      const created = await get(result.lastInsertId);
-      if (!created) throw new Error(`accounts.insert: row ${result.lastInsertId} missing`);
-      return created;
+      const target = KIND_MAP[account.kind];
+      const created = await ledger.insertAccount({
+        name: account.name,
+        type: target.type,
+        subtype: target.subtype,
+        parent_id: await rootIdFor(target.type),
+        last4: account.last4 ?? null,
+        gnucash_guid: account.gnucash_guid ?? null,
+      });
+      const facade = await get(created.id);
+      if (!facade) throw new Error(`accounts.insert: row ${created.id} missing`);
+      return facade;
     },
 
     async update(id, patch) {
       assertValidAccountPatch(patch);
+      const existing = await get(id);
+      if (!existing) return null;
+
+      let type: AccountType | undefined;
+      let subtype: AccountSubtype | undefined;
+      let parentId: number | undefined;
+      if (patch.kind !== undefined) {
+        const target = KIND_MAP[patch.kind];
+        if (target.type !== existing.type) {
+          const children = await count("SELECT COUNT(*) AS count FROM accounts WHERE parent_id = ?", [
+            id,
+          ]);
+          if (children > 0) {
+            throw new ValidationError(
+              "Cannot change the kind of an account that has child accounts.",
+            );
+          }
+          type = target.type;
+          parentId = await rootIdFor(target.type);
+        }
+        subtype = target.subtype;
+      }
+
       const statement = buildUpdate(
         "accounts",
         {
           name: patch.name,
-          kind: patch.kind,
+          type,
+          subtype,
+          parent_id: parentId,
           last4: patch.last4,
           gnucash_guid: patch.gnucash_guid,
         },
         id,
       );
-      if (statement) await db.execute(statement.sql, statement.params);
+      if (statement) await db.batch([statement]);
       return get(id);
     },
 
     async archive(id) {
-      const result = await db.execute("UPDATE accounts SET archived = 1 WHERE id = ?", [id]);
-      return result.rowsAffected > 0;
+      if ((await get(id)) === null) return false;
+      return ledger.archiveAccount(id);
     },
 
     async delete(id) {
       const existing = await get(id);
       if (!existing) return false;
 
-      const paymentRefs = await count("SELECT COUNT(*) AS count FROM payments WHERE account_id = ?", [id]);
-      if (paymentRefs > 0) {
+      const splitRefs = await count("SELECT COUNT(*) AS count FROM splits WHERE account_id = ?", [id]);
+      if (splitRefs > 0) {
         throw new EntityInUseError(
           "Cannot delete this account because payment history references it. Archive the account instead.",
         );
@@ -125,8 +216,7 @@ export function createAccountsRepo(db: Database): AccountsRepo {
         );
       }
 
-      const result = await db.execute("DELETE FROM accounts WHERE id = ?", [id]);
-      return result.rowsAffected > 0;
+      return ledger.deleteAccount(id);
     },
   };
 }

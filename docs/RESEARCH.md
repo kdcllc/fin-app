@@ -101,19 +101,21 @@ Key facts from GnuCash's own documentation:
 2. **Write (only when GnuCash is closed)** — to push bill payments into GnuCash: check the `gnclock` table and refuse if GnuCash holds the lock; take our own lock row; **copy the file as a backup first**; insert balanced transaction + splits (double-entry: debit the EXPENSE account, credit the funding BANK/CREDIT account, amounts as numerator/denominator rationals, 32-hex GUIDs); wrap in a single SQL transaction; verify the `versions` table schema version before writing and refuse on unknown versions; never touch `slots`.
 3. **Fallback (zero-risk)** — generate a **QIF/CSV file** and let the user run GnuCash's built-in import assistant, which provides duplicate detection and account matching. Use this whenever the write preconditions can't be met.
 
-_[Implemented in v0.3: read-only sqlite3 reader (probe/accounts/transactions), account & category GUID mapping, transaction import with review, QIF/CSV export fallback, and reconciliation with manual overrides — see `src-tauri/src/gnucash_reader.rs`, `src/core/gnucash-*.ts`, `src/pages/GnuCashPage.tsx`; direct GnuCash write (tier 2) remains deferred pending explicit go-ahead.]_
+_[Implemented in v0.3: read-only sqlite3 reader (probe/accounts/transactions), account & category GUID mapping, transaction import with review, QIF/CSV export fallback, and reconciliation with manual overrides — see `src-tauri/src/gnucash_reader.rs`, `src/core/gnucash-*.ts`, `src/pages/GnuCashPage.tsx`; direct GnuCash write (tier 2) remains deferred pending explicit go-ahead. The QIF/CSV export fallback and reconciliation were later retired in the ledger-core goal; the GnuCash page now offers Link book, Account mapping, and Import only.]_
 
 ### Data-model essentials to honor
 
 - Accounts form a tree with types (BANK, CREDIT, EXPENSE, …); each has a commodity (currency) with a fraction (e.g., 100 = cents).
 - An "expense" is not a record type — it's a balanced transaction: one split with positive value on an EXPENSE account, one with negative value on the funding account. **Sum of split values per transaction must equal 0.**
-- Map fin-app `accounts` and `categories` to GnuCash account GUIDs (asset/credit accounts ↔ payment methods; EXPENSE accounts ↔ categories) — this mapping table is the heart of the integration.
+- Map fin-app `accounts` and `categories` to GnuCash account GUIDs (asset/credit accounts ↔ payment methods; EXPENSE accounts ↔ categories) — this mapping table is the heart of the integration. _[Implemented: since the ledger-core goal, categories are EXPENSE accounts in fin-app's own ledger, so both funding and EXPENSE accounts carry `accounts.gnucash_guid`.]_
 
 ## 5. Proposed Application Scope (input for goals/tasks)
 
 ### Core data model (SQLite, one file = one book)
 
 `accounts` (mapped to GnuCash account GUIDs where applicable) · `payees` · `categories` · `payments` (payee, account, category, date, amount, memo, source: manual|gnucash|xlsx) · `recurring_bills` (payee, frequency, expected amount, due day) · `import_log`.
+
+_[Superseded by the ledger-core goal (schema v9, migration `0009_double_entry_ledger.sql`): `accounts` is now a typed tree (ASSET/LIABILITY/INCOME/EXPENSE/EQUITY, with `subtype`, `parent_id`, `placeholder`, `gnucash_guid`), `transactions` and `splits` replace `payments` (split `amount_cents` is debit-positive and a transaction's splits sum to 0), and `categories` became EXPENSE accounts (old ids kept in `legacy_category_map`). `payments`, `categories`, `payment_exports` and `gnucash_matches` were dropped; existing books migrate automatically after a verified backup. `payees`, `recurring_bills` and `import_log` remain. A "payment" is now a payment-shaped transaction: a payee plus exactly two splits, one EXPENSE and one ASSET/LIABILITY.]_
 
 ### MVP features (v0.1)
 
@@ -129,9 +131,9 @@ _[Implemented in v0.3: read-only sqlite3 reader (probe/accounts/transactions), a
 
 ### v0.3 — GnuCash integration
 
-7. Read-only GnuCash SQLite import (transactions → payments, account/category GUID mapping).
-8. Reverse flow: export entered bill payments as QIF/CSV for GnuCash import (zero-risk path).
-9. Reconciliation view: fin-app payments vs. GnuCash transactions.
+7. Read-only GnuCash SQLite import (transactions → payments, account/category GUID mapping). _[Imports now land as payment-shaped ledger transactions.]_
+8. ~~Reverse flow: export entered bill payments as QIF/CSV for GnuCash import (zero-risk path).~~ _[Retired in the ledger-core goal.]_
+9. ~~Reconciliation view: fin-app payments vs. GnuCash transactions.~~ _[Retired in the ledger-core goal.]_
 
 ### v0.4 — GnuCash direct write (optional, guarded)
 

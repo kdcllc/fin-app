@@ -47,6 +47,36 @@ interface AggregateRow {
   count: number;
 }
 
+/**
+ * Payment-shaped transactions (non-NULL payee, exactly two splits: one EXPENSE,
+ * one ASSET/LIABILITY) projected as legacy payment rows. `category_id` is NULL
+ * for the `uncategorized` system account.
+ */
+const PAYMENT_SHAPED = `(
+  SELECT t.id AS id,
+         t.payee_id AS payee_id,
+         fs.account_id AS account_id,
+         CASE WHEN ea.system_role = 'uncategorized' THEN NULL ELSE es.account_id END AS category_id,
+         CASE WHEN ea.system_role = 'uncategorized' THEN NULL ELSE ea.name END AS category_name,
+         t.date AS date,
+         es.amount_cents AS amount_cents,
+         t.memo AS memo,
+         t.source AS source,
+         t.external_ref AS external_ref,
+         t.source_sheet AS source_sheet,
+         t.source_row AS source_row,
+         t.source_col AS source_col,
+         t.occurrence_index AS occurrence_index,
+         t.created_at AS created_at
+  FROM transactions t
+  JOIN splits es ON es.transaction_id = t.id
+  JOIN accounts ea ON ea.id = es.account_id AND ea.type = 'EXPENSE'
+  JOIN splits fs ON fs.transaction_id = t.id AND fs.id != es.id
+  JOIN accounts fa ON fa.id = fs.account_id AND fa.type IN ('ASSET', 'LIABILITY')
+  WHERE t.payee_id IS NOT NULL
+    AND (SELECT COUNT(*) FROM splits c WHERE c.transaction_id = t.id) = 2
+)`;
+
 function pad2(value: number): string {
   return String(value).padStart(2, "0");
 }
@@ -159,7 +189,7 @@ export async function allTimeWindow(
   repos: Repositories,
 ): Promise<{ from: string; to: string } | null> {
   const [row] = await getReportDatabase(repos).select<{ min_date: string | null; max_date: string | null }>(
-    "SELECT MIN(date) AS min_date, MAX(date) AS max_date FROM payments",
+    `SELECT MIN(date) AS min_date, MAX(date) AS max_date FROM ${PAYMENT_SHAPED}`,
   );
   if (!row?.min_date || !row.max_date) return null;
   return { from: row.min_date, to: row.max_date };
@@ -259,11 +289,10 @@ export async function listPaymentsForReport(
     `SELECT ${PAYMENT_COLUMNS},
             py.name AS payee_name,
             a.name AS account_name,
-            COALESCE(c.name, 'Uncategorized') AS category_name
-     FROM payments p
+            COALESCE(p.category_name, 'Uncategorized') AS category_name
+     FROM ${PAYMENT_SHAPED} p
      JOIN payees py ON py.id = p.payee_id
      JOIN accounts a ON a.id = p.account_id
-     LEFT JOIN categories c ON c.id = p.category_id
      WHERE ${clauses.join(" AND ")}
      ORDER BY p.date, p.id`,
     params,
@@ -274,11 +303,10 @@ async function aggregateCategoryAll(db: Database, filter: ReportFilter): Promise
   const { clauses, params } = buildFilterClauses(filter);
   const rows = await db.select<AggregateRow>(
     `SELECT p.category_id AS group_key,
-            COALESCE(c.name, 'Uncategorized') AS group_label,
+            COALESCE(p.category_name, 'Uncategorized') AS group_label,
             SUM(p.amount_cents) AS total_cents,
             COUNT(*) AS count
-     FROM payments p
-     LEFT JOIN categories c ON c.id = p.category_id
+     FROM ${PAYMENT_SHAPED} p
      WHERE ${clauses.join(" AND ")}
      GROUP BY p.category_id`,
     params,
@@ -302,7 +330,7 @@ async function aggregatePayeeAll(db: Database, filter: ReportFilter): Promise<Re
             py.name AS group_label,
             SUM(p.amount_cents) AS total_cents,
             COUNT(*) AS count
-     FROM payments p
+     FROM ${PAYMENT_SHAPED} p
      JOIN payees py ON py.id = p.payee_id
      WHERE ${clauses.join(" AND ")}
      GROUP BY p.payee_id`,
@@ -327,7 +355,7 @@ async function aggregateAccountAll(db: Database, filter: ReportFilter): Promise<
             a.name AS group_label,
             SUM(p.amount_cents) AS total_cents,
             COUNT(*) AS count
-     FROM payments p
+     FROM ${PAYMENT_SHAPED} p
      JOIN accounts a ON a.id = p.account_id
      WHERE ${clauses.join(" AND ")}
      GROUP BY p.account_id`,
@@ -351,7 +379,7 @@ async function aggregateTotalMonth(db: Database, filter: ReportFilter): Promise<
     `SELECT substr(p.date, 1, 7) AS period_key,
             SUM(p.amount_cents) AS total_cents,
             COUNT(*) AS count
-     FROM payments p
+     FROM ${PAYMENT_SHAPED} p
      WHERE ${clauses.join(" AND ")}
      GROUP BY substr(p.date, 1, 7)
      ORDER BY period_key`,
@@ -377,7 +405,7 @@ async function aggregateTotalYear(db: Database, filter: ReportFilter): Promise<R
     `SELECT substr(p.date, 1, 4) AS period_key,
             SUM(p.amount_cents) AS total_cents,
             COUNT(*) AS count
-     FROM payments p
+     FROM ${PAYMENT_SHAPED} p
      WHERE ${clauses.join(" AND ")}
      GROUP BY substr(p.date, 1, 4)
      ORDER BY period_key`,

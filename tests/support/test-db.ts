@@ -34,21 +34,75 @@ export interface TestDb {
   repos: Repositories;
   /** Every execute/select/batch call, in order — lets tests assert call shape. */
   calls: RecordedDbCall[];
+  /**
+   * Apply every migration not yet applied (only meaningful after
+   * `openTestDb({ upToVersion })`), exactly like the Rust runner: FKs off,
+   * one transaction per file, `PRAGMA foreign_key_check` must be empty.
+   */
+  applyRemainingMigrations(): void;
   close(): void;
 }
 
-/** Open a fresh in-memory book database with all migrations applied. */
-export function openTestDb(): TestDb {
+export interface OpenTestDbOptions {
+  /**
+   * Apply only migrations whose numeric prefix is <= this version.
+   * Default: apply all migrations.
+   */
+  upToVersion?: number;
+}
+
+interface MigrationFile {
+  version: number;
+  name: string;
+}
+
+function listMigrations(): MigrationFile[] {
+  const files = readdirSync(MIGRATIONS_DIR)
+    .filter((name) => name.endsWith(".sql"))
+    .sort()
+    .map((name) => ({ version: Number.parseInt(name.slice(0, 4), 10), name }));
+  if (files.length === 0) throw new Error(`no migrations found in ${MIGRATIONS_DIR}`);
+  return files;
+}
+
+/** Open a fresh in-memory book database (all migrations applied unless `upToVersion` is given). */
+export function openTestDb(options: OpenTestDbOptions = {}): TestDb {
   const raw = new BetterSqlite3(":memory:");
   raw.pragma("foreign_keys = ON"); // the Rust backend sets this in open_book; mirror it.
 
-  const migrations = readdirSync(MIGRATIONS_DIR)
-    .filter((name) => name.endsWith(".sql"))
-    .sort();
-  if (migrations.length === 0) throw new Error(`no migrations found in ${MIGRATIONS_DIR}`);
-  for (const name of migrations) {
-    raw.exec(readFileSync(join(MIGRATIONS_DIR, name), "utf8"));
+  const pending = listMigrations();
+  const upTo = options.upToVersion ?? Number.POSITIVE_INFINITY;
+
+  // Mirrors the Rust `run_migrations`: foreign keys OFF outside any
+  // transaction, one transaction per file, `foreign_key_check` gate before
+  // COMMIT, foreign keys restored ON on every exit path.
+  function applyMigrations(limit: number): void {
+    raw.pragma("foreign_keys = OFF");
+    try {
+      while (pending.length > 0 && pending[0].version <= limit) {
+        const { name } = pending[0];
+        raw.exec("BEGIN");
+        try {
+          raw.exec(readFileSync(join(MIGRATIONS_DIR, name), "utf8"));
+          const violations = raw.pragma("foreign_key_check") as unknown[];
+          if (violations.length > 0) {
+            throw new Error(
+              `migration ${name} left foreign key violations: ${JSON.stringify(violations)}`,
+            );
+          }
+          raw.exec("COMMIT");
+        } catch (error) {
+          raw.exec("ROLLBACK");
+          throw error;
+        }
+        pending.shift();
+      }
+    } finally {
+      raw.pragma("foreign_keys = ON");
+    }
   }
+
+  applyMigrations(upTo);
 
   const calls: RecordedDbCall[] = [];
 
@@ -110,5 +164,11 @@ export function openTestDb(): TestDb {
     },
   };
 
-  return { db, repos: createRepositories(db), calls, close: () => raw.close() };
+  return {
+    db,
+    repos: createRepositories(db),
+    calls,
+    applyRemainingMigrations: () => applyMigrations(Number.POSITIVE_INFINITY),
+    close: () => raw.close(),
+  };
 }

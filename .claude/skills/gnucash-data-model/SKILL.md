@@ -17,7 +17,7 @@ GnuCash's file formats are **not a public API** (per its own wiki). Everything h
 
 1. **Read — any time.** Open with SQLite **read-only flag** (enforced in code, not convention). Concurrent reads while GnuCash runs are safe per its docs (may be momentarily stale).
 2. **Write — only when GnuCash is closed**, via the write-session sequence below.
-3. **Fallback — QIF/CSV export** for GnuCash's built-in importer (duplicate detection included). Zero risk; use whenever write preconditions can't be met.
+3. **Fallback — QIF/CSV export** for GnuCash's built-in importer (duplicate detection included). Zero risk; a design option only — fin-app no longer ships it (retired in the ledger-core goal).
 
 ## Write-session sequence (all steps mandatory, in order)
 
@@ -38,7 +38,7 @@ Reference implementation for field-level semantics: **piecash** (github.com/sdem
 - **An "expense" is not a record type**: it's a balanced transaction — positive-value split on an EXPENSE account, negative-value split on the funding BANK/CREDIT account.
 - **GUIDs**: every object keyed by a 32-char lowercase hex GUID; generate new ones for inserts (UUID4 without dashes).
 - **Dates**: stored as strings in GnuCash's exact formats — match what GnuCash 5.x itself writes (check the fixture book, don't guess).
-- **fin-app mapping**: `accounts.gnucash_guid` ↔ BANK/CREDIT accounts; `categories.gnucash_guid` ↔ EXPENSE accounts. The mapping table is the heart of the integration.
+- **fin-app mapping**: `accounts.gnucash_guid` ↔ BANK/CREDIT accounts; categories are EXPENSE accounts in the ledger, so `accounts.gnucash_guid` ↔ EXPENSE accounts as well. The mapping table is the heart of the integration.
 
 ## Testing rules
 

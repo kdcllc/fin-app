@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   ForeignKeyViolationError,
   ValidationError,
+  createTransfer,
+  postTransaction,
   getBillPayGridForYear,
   buildQuickAddDraft,
   createManualPayment,
@@ -439,5 +441,194 @@ describe("payments repository", () => {
     expect(row?.payee_archived).toBe(true);
     expect(row?.row_total_cents).toBe(999);
     expect(row?.cells[2].payments).toHaveLength(1);
+  });
+
+  it("stores a payment as a balanced two-split transaction and maps null category to uncategorized", async () => {
+    const payment = await pay("2026-02-15", 4005, { category_id: null });
+    expect(payment.category_id).toBeNull();
+
+    const stored = await t.repos.ledger.getTransaction(payment.id);
+    const uncategorized = (await t.repos.ledger.getSystemAccount("uncategorized"))!;
+    expect(stored?.splits.map((s) => [s.account_id, s.amount_cents])).toEqual([
+      [uncategorized.id, 4005],
+      [accountId, -4005],
+    ]);
+    expect(stored?.splits.reduce((sum, s) => sum + s.amount_cents, 0)).toBe(0);
+
+    const withCategory = await pay("2026-02-16", 100);
+    const storedCat = await t.repos.ledger.getTransaction(withCategory.id);
+    expect(storedCat?.splits.map((s) => [s.account_id, s.amount_cents])).toEqual([
+      [categoryId, 100],
+      [accountId, -100],
+    ]);
+  });
+
+  it("never lists or gets multi-split transactions, transfers or payee-less transactions", async () => {
+    const payment = await pay("2026-02-15", 1000);
+    const other = await t.repos.accounts.insert({ name: "Savings", kind: "savings" });
+    const transfer = await createTransfer(t.repos.ledger, {
+      date: "2026-02-15",
+      fromAccountId: accountId,
+      toAccountId: other.id,
+      amount_cents: 500,
+      payee_id: payeeId,
+    });
+    const category2 = await t.repos.categories.insert({ name: "Other Cat" });
+    const multi = await postTransaction(t.repos.ledger, {
+      date: "2026-02-15",
+      payee_id: payeeId,
+      splits: [
+        { account_id: categoryId, amount_cents: 600 },
+        { account_id: category2.id, amount_cents: 400 },
+        { account_id: accountId, amount_cents: -1000 },
+      ],
+    });
+    const noPayee = await postTransaction(t.repos.ledger, {
+      date: "2026-02-15",
+      splits: [
+        { account_id: categoryId, amount_cents: 50 },
+        { account_id: accountId, amount_cents: -50 },
+      ],
+    });
+
+    const listed = await t.repos.payments.list({ from: "2026-02-01", to: "2026-02-28" });
+    expect(listed.map((p) => p.id)).toEqual([payment.id]);
+    for (const hidden of [transfer.id, multi.id, noPayee.id]) {
+      expect(await t.repos.payments.get(hidden)).toBeNull();
+      expect(await t.repos.payments.update(hidden, { amount_cents: 1 })).toBeNull();
+      expect(await t.repos.payments.delete(hidden)).toBe(false);
+      expect(await t.repos.ledger.getTransaction(hidden)).not.toBeNull();
+    }
+  });
+
+  it("filters by category through the EXPENSE split account", async () => {
+    const other = await t.repos.categories.insert({ name: "Other Cat" });
+    const mine = await pay("2026-02-10", 1500);
+    await pay("2026-02-11", 2500, { category_id: other.id });
+    const window = { from: "2026-02-01", to: "2026-02-28" };
+    expect((await t.repos.payments.list({ ...window, categoryId })).map((p) => p.id)).toEqual([
+      mine.id,
+    ]);
+  });
+
+  it("rejects wrong-kind accounts and categories with ValidationError", async () => {
+    await expect(pay("2026-02-15", 1000, { account_id: categoryId })).rejects.toThrow(
+      ValidationError,
+    );
+    await expect(pay("2026-02-15", 1000, { category_id: accountId })).rejects.toThrow(
+      ValidationError,
+    );
+    await expect(pay("2026-02-15", 1000, { category_id: 9999 })).rejects.toThrow(
+      ForeignKeyViolationError,
+    );
+  });
+
+  it("keeps xlsx import snapshot in sync on update and rolls back failed updates", async () => {
+    const seeded = await t.repos.payments.insert({
+      payee_id: payeeId,
+      account_id: accountId,
+      category_id: categoryId,
+      date: "2026-03-01",
+      amount_cents: 5000,
+      source: "xlsx",
+      source_sheet: "2026",
+      source_row: 20,
+      source_col: 4,
+      occurrence_index: 1,
+    });
+    const other = await t.repos.accounts.insert({ name: "Visa", kind: "credit" });
+    await t.repos.payments.update(seeded.id, { amount_cents: 5100, account_id: other.id });
+
+    const [snapshot] = await t.db.select<{
+      import_account_id: number;
+      import_amount_cents: number;
+    }>("SELECT import_account_id, import_amount_cents FROM transactions WHERE id = ?", [seeded.id]);
+    expect(snapshot).toEqual({ import_account_id: other.id, import_amount_cents: 5100 });
+
+    const keyed = await t.repos.payments.listXlsxByBusinessKeys([
+      { payee_id: payeeId, account_id: other.id, date: "2026-03-01", amount_cents: 5100 },
+    ]);
+    expect(keyed.map((p) => p.id)).toEqual([seeded.id]);
+
+    await expect(
+      t.repos.payments.update(seeded.id, { payee_id: 9999, amount_cents: 1 }),
+    ).rejects.toThrow(ForeignKeyViolationError);
+    expect((await t.repos.payments.get(seeded.id))?.amount_cents).toBe(5100);
+  });
+
+  it("clears provenance and the import snapshot when an xlsx payment becomes manual", async () => {
+    const seeded = await t.repos.payments.insert({
+      payee_id: payeeId,
+      account_id: accountId,
+      category_id: categoryId,
+      date: "2026-03-01",
+      amount_cents: 5000,
+      source: "xlsx",
+      source_sheet: "2026",
+      source_row: 3,
+      source_col: 4,
+      occurrence_index: 1,
+    });
+    await t.repos.payments.update(seeded.id, {
+      source: "manual",
+      source_sheet: null,
+      source_row: null,
+      source_col: null,
+      occurrence_index: null,
+    });
+    const [row] = await t.db.select<Record<string, unknown>>(
+      "SELECT source, source_sheet, source_row, source_col, occurrence_index, import_account_id, import_amount_cents FROM transactions WHERE id = ?",
+      [seeded.id],
+    );
+    expect(row).toEqual({
+      source: "manual",
+      source_sheet: null,
+      source_row: null,
+      source_col: null,
+      occurrence_index: null,
+      import_account_id: null,
+      import_amount_cents: null,
+    });
+  });
+
+  it("treats present-but-undefined patch keys as absent", async () => {
+    const xlsx = await t.repos.payments.insert({
+      payee_id: payeeId,
+      account_id: accountId,
+      category_id: categoryId,
+      date: "2026-03-01",
+      amount_cents: 5000,
+      memo: "keep me",
+      source: "xlsx",
+      external_ref: "ref-9",
+      source_sheet: "2026",
+      source_row: 3,
+      source_col: 4,
+      occurrence_index: 1,
+    });
+    const after = await t.repos.payments.update(xlsx.id, {
+      memo: undefined,
+      external_ref: undefined,
+      source_sheet: undefined,
+    });
+    expect(after).toEqual(xlsx);
+    expect(await t.repos.payments.get(xlsx.id)).toEqual(xlsx);
+
+    const manual = await t.repos.payments.insert({
+      payee_id: payeeId,
+      account_id: accountId,
+      category_id: categoryId,
+      date: "2026-03-02",
+      amount_cents: 100,
+      memo: "manual memo",
+    });
+    const kept = await t.repos.payments.update(manual.id, { memo: undefined });
+    expect(kept?.memo).toBe("manual memo");
+  });
+
+  it("round-trips a zero-amount payment", async () => {
+    const zero = await pay("2026-02-15", 0);
+    expect(zero.amount_cents).toBe(0);
+    expect((await t.repos.payments.get(zero.id))?.id).toBe(zero.id);
   });
 });

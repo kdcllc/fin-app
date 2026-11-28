@@ -18,11 +18,15 @@ import { BillsGridPage } from "./pages/BillsGridPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { ReportsPage } from "./pages/ReportsPage";
 import { GnuCashPage } from "./pages/GnuCashPage";
+import { AccountsPage } from "./pages/AccountsPage";
+import { RegisterPage } from "./pages/RegisterPage";
 import { loadSettings, updateSettings, type AppSettings } from "./settings";
 import "./App.css";
 
 type PageId =
   | "dashboard"
+  | "accounts"
+  | "register"
   | "bills"
   | "payments"
   | "reports"
@@ -33,12 +37,14 @@ type PageId =
 
 const PAGES: { id: PageId; label: string; blurb: string }[] = [
   { id: "dashboard", label: "Dashboard", blurb: "Month-at-a-glance overview of your bills." },
+  { id: "accounts", label: "Accounts", blurb: "Your account tree and balances." },
+  { id: "register", label: "Register", blurb: "Account register with running balance." },
   { id: "bills", label: "Bills Grid", blurb: "The yearly bills-by-month grid." },
   { id: "payments", label: "Payments", blurb: "Record and browse bill payments." },
   { id: "reports", label: "Reports", blurb: "Spending summaries and printable reports." },
   { id: "import", label: "Import", blurb: "Import your bill-pay spreadsheet." },
   { id: "entities", label: "Manage Entities", blurb: "Manage payees, accounts, and categories." },
-  { id: "gnucash", label: "GnuCash", blurb: "Link payments to your GnuCash book." },
+  { id: "gnucash", label: "GnuCash", blurb: "Import from your GnuCash book." },
   { id: "settings", label: "Settings", blurb: "" },
 ];
 
@@ -100,6 +106,7 @@ function triggerUpdateCheckOnce(onAvailable: (version: string) => void): void {
 function App() {
   const [phase, setPhase] = useState<Phase>({ kind: "loading" });
   const [page, setPage] = useState<PageId>("dashboard");
+  const [registerAccountId, setRegisterAccountId] = useState<number | undefined>(undefined);
   const [backupNotice, setBackupNotice] = useState<string | null>(null);
   const [updateNotice, setUpdateNotice] = useState<string | null>(null);
   const [appBusy, setAppBusy] = useState(false);
@@ -177,6 +184,11 @@ function App() {
     );
   }
 
+  function handleOpenRegister(accountId: number) {
+    setRegisterAccountId(accountId);
+    setPage("register");
+  }
+
   const active = PAGES.find((p) => p.id === page) ?? PAGES[0];
   return (
     <div className="app">
@@ -228,6 +240,10 @@ function App() {
           />
         ) : active.id === "dashboard" ? (
           <DashboardPage repos={phase.repos} initialYear={phase.settings.defaultYear ?? undefined} />
+        ) : active.id === "accounts" ? (
+          <AccountsPage repos={phase.repos} onOpenRegister={handleOpenRegister} />
+        ) : active.id === "register" ? (
+          <RegisterPage repos={phase.repos} initialAccountId={registerAccountId} />
         ) : active.id === "entities" ? (
           <EntityManagementPage repos={phase.repos} />
         ) : active.id === "payments" ? (

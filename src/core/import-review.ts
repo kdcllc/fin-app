@@ -1,5 +1,6 @@
 import type { BatchStatement, SqlValue } from "./db";
-import type { Account, AccountKind, Category, Payee, Payment, XlsxBusinessKey } from "./entities";
+import type { Account, AccountKind, Category, Payee, XlsxBusinessKey } from "./entities";
+import type { XlsxIdentityRow } from "./repositories/ledger";
 import type { Repositories } from "./index";
 
 export type DuplicateDecision = "keep" | "skip";
@@ -45,7 +46,7 @@ export interface ReviewedImportCommitInput {
   /** Per-stage progress callback (the contract the import UI consumes). */
   on_progress?: (progress: ImportCommitProgress) => void;
   /**
-   * Test hook: poison the batch after N payment INSERT statements to prove
+   * Test hook: poison the batch after N transaction INSERT statements to prove
    * that a mid-batch failure rolls back every statement.
    */
   fail_after_insert_count?: number;
@@ -109,7 +110,8 @@ function businessKeyOf(
 }
 
 /**
- * One batched query pass: fetch every existing xlsx payment matching any
+ * One batched query pass: fetch every existing xlsx transaction (of ANY shape,
+ * so edited multi-split ones count) matching any
  * review row's business key, grouped by that key. Rows whose payee/account
  * do not exist yet cannot have matches (payments FK-reference entities) and
  * contribute no key.
@@ -118,7 +120,7 @@ async function loadExistingXlsxMatches(
   repos: Repositories,
   rows: ImportReviewRow[],
   maps: EntityMaps,
-): Promise<Map<string, Payment[]>> {
+): Promise<Map<string, XlsxIdentityRow[]>> {
   const keys: XlsxBusinessKey[] = [];
   const seen = new Set<string>();
   for (const row of rows) {
@@ -136,20 +138,20 @@ async function loadExistingXlsxMatches(
     });
   }
 
-  const matches = await repos.payments.listXlsxByBusinessKeys(keys);
-  const byKey = new Map<string, Payment[]>();
-  for (const payment of matches) {
+  const matches = await repos.ledger.listXlsxIdentities(keys);
+  const byKey = new Map<string, XlsxIdentityRow[]>();
+  for (const identity of matches) {
     const key = businessKeyOf(
-      payment.payee_id,
-      payment.account_id,
-      payment.date,
-      payment.amount_cents,
+      identity.payee_id,
+      identity.import_account_id,
+      identity.date,
+      identity.import_amount_cents,
     );
     const bucket = byKey.get(key);
     if (bucket) {
-      bucket.push(payment);
+      bucket.push(identity);
     } else {
-      byKey.set(key, [payment]);
+      byKey.set(key, [identity]);
     }
   }
   return byKey;
@@ -163,7 +165,7 @@ type ComputedDedupState =
 function classifyAgainstExisting(
   row: ImportReviewRow,
   maps: EntityMaps,
-  existingByKey: Map<string, Payment[]>,
+  existingByKey: Map<string, XlsxIdentityRow[]>,
 ): ComputedDedupState {
   const payee = maps.payeesByName.get(keyOf(row.payee_name));
   const account = maps.accountsByName.get(keyOf(row.account_name));
@@ -174,11 +176,11 @@ function classifyAgainstExisting(
   if (matches.length === 0) return { kind: "new" };
 
   const hasExactMatch = matches.some(
-    (payment) =>
-      payment.source_sheet === row.source_sheet &&
-      payment.source_row === row.source_row &&
-      payment.source_col === row.source_col &&
-      payment.occurrence_index === row.occurrence_index,
+    (identity) =>
+      identity.source_sheet === row.source_sheet &&
+      identity.source_row === row.source_row &&
+      identity.source_col === row.source_col &&
+      identity.occurrence_index === row.occurrence_index,
   );
   if (hasExactMatch) return { kind: "exact_duplicate" };
 
@@ -227,24 +229,50 @@ function assertCommitable(rows: ImportReviewRow[]): void {
 }
 
 /**
- * How a payment statement binds an entity id: a known integer id for
- * entities that already exist, or the exact name this batch inserts, resolved
- * by a deterministic scalar subquery (`SELECT MIN(id) ... WHERE name = ?`).
- * The entity tables have no UNIQUE name constraint, so `INSERT OR IGNORE`
- * is not a dedup mechanism here — TS decides new-vs-existing instead, and
- * inserts each genuinely new name exactly once per batch.
+ * How a statement binds an entity id: a known integer id for entities that
+ * already exist, or the exact name this batch inserts, resolved by a
+ * deterministic scalar subquery (`SELECT MIN(id) ... WHERE name = ?`) that is
+ * restricted to the entity's own account type, so a category and a funding
+ * account sharing a name never resolve to each other. The tables have no
+ * UNIQUE name constraint, so `INSERT OR IGNORE` is not a dedup mechanism here
+ * — TS decides new-vs-existing instead, and inserts each genuinely new name
+ * exactly once per batch.
  */
 type EntityRef = { id: number } | { pendingName: string };
+type EntityTable = "payees" | "funding" | "category";
+
+const ENTITY_LOOKUP_SQL: Record<EntityTable, string> = {
+  payees: "SELECT MIN(id) FROM payees WHERE name = ?",
+  funding:
+    "SELECT MIN(id) FROM accounts WHERE name = ? AND type IN ('ASSET', 'LIABILITY') AND placeholder = 0 AND system_role IS NULL",
+  category:
+    "SELECT MIN(id) FROM accounts WHERE name = ? AND type = 'EXPENSE' AND placeholder = 0 AND system_role IS NULL",
+};
 
 function entityRefSql(
   ref: EntityRef | null,
-  table: "payees" | "accounts" | "categories",
+  table: EntityTable,
 ): { expr: string; param: SqlValue } {
   if (ref === null) return { expr: "?", param: null };
   if ("id" in ref) return { expr: "?", param: ref.id };
   // MIN(id) as a determinism guard should duplicate names ever exist.
-  return { expr: `(SELECT MIN(id) FROM ${table} WHERE name = ?)`, param: ref.pendingName };
+  return { expr: `(${ENTITY_LOOKUP_SQL[table]})`, param: ref.pendingName };
 }
+
+/** Ledger type/subtype/root for each legacy account kind. */
+const FUNDING_ACCOUNT_SHAPE: Record<
+  AccountKind,
+  { type: "ASSET" | "LIABILITY"; subtype: string; root: "root_asset" | "root_liability" }
+> = {
+  checking: { type: "ASSET", subtype: "bank", root: "root_asset" },
+  cash: { type: "ASSET", subtype: "cash", root: "root_asset" },
+  savings: { type: "ASSET", subtype: "savings", root: "root_asset" },
+  credit: { type: "LIABILITY", subtype: "credit_card", root: "root_liability" },
+  loan: { type: "LIABILITY", subtype: "loan", root: "root_liability" },
+};
+
+/** The Uncategorized system account, used when a row has no category. */
+const UNCATEGORIZED_SQL = "(SELECT id FROM accounts WHERE system_role = 'uncategorized')";
 
 function buildCommitStatements(
   input: ReviewedImportCommitInput,
@@ -280,9 +308,11 @@ function buildCommitStatements(
     if (pendingName === undefined) {
       pendingName = row.account_name.trim();
       pendingAccounts.set(key, pendingName);
+      const shape = FUNDING_ACCOUNT_SHAPE[row.account_kind];
       statements.push({
-        sql: "INSERT INTO accounts (name, kind) VALUES (?, ?)",
-        params: [pendingName, row.account_kind],
+        sql: `INSERT INTO accounts (name, type, subtype, parent_id)
+              VALUES (?, ?, ?, (SELECT id FROM accounts WHERE system_role = ?))`,
+        params: [pendingName, shape.type, shape.subtype, shape.root],
       });
     }
     return { pendingName };
@@ -297,7 +327,11 @@ function buildCommitStatements(
     if (pendingName === undefined) {
       pendingName = row.category_name.trim();
       pendingCategories.set(key, pendingName);
-      statements.push({ sql: "INSERT INTO categories (name) VALUES (?)", params: [pendingName] });
+      statements.push({
+        sql: `INSERT INTO accounts (name, type, parent_id)
+              VALUES (?, 'EXPENSE', (SELECT id FROM accounts WHERE system_role = 'root_expense'))`,
+        params: [pendingName],
+      });
     }
     return { pendingName };
   }
@@ -305,36 +339,49 @@ function buildCommitStatements(
   let paymentInsertCount = 0;
   for (const row of rowsToInsert) {
     const payee = entityRefSql(payeeRef(row), "payees");
-    const account = entityRefSql(accountRef(row), "accounts");
-    const category = entityRefSql(categoryRef(row), "categories");
+    const account = entityRefSql(accountRef(row), "funding");
+    const category = entityRefSql(categoryRef(row), "category");
+    // A row without a category lands on the Uncategorized account.
+    const categoryExpr = category.param === null ? UNCATEGORIZED_SQL : category.expr;
+    const categoryParams: SqlValue[] = category.param === null ? [] : [category.param];
 
+    // Transaction header + two splits (expense +amount, funding -amount). Both
+    // split inserts bind the header via MAX(id): same connection and batch.
     statements.push({
-      sql: `INSERT INTO payments (
-              payee_id,
-              account_id,
-              category_id,
+      sql: `INSERT INTO transactions (
               date,
-              amount_cents,
+              payee_id,
               memo,
               source,
               source_sheet,
               source_row,
               source_col,
-              occurrence_index
+              occurrence_index,
+              import_account_id,
+              import_amount_cents
             )
-            VALUES (${payee.expr}, ${account.expr}, ${category.expr}, ?, ?, ?, 'xlsx', ?, ?, ?, ?)`,
+            VALUES (?, ${payee.expr}, ?, 'xlsx', ?, ?, ?, ?, ${account.expr}, ?)`,
       params: [
-        payee.param,
-        account.param,
-        category.param,
         row.date,
-        row.amount_cents,
+        payee.param,
         row.memo,
         row.source_sheet,
         row.source_row,
         row.source_col,
         row.occurrence_index,
+        account.param,
+        row.amount_cents,
       ],
+    });
+    statements.push({
+      sql: `INSERT INTO splits (transaction_id, account_id, amount_cents)
+            VALUES ((SELECT MAX(id) FROM transactions), ${categoryExpr}, ?)`,
+      params: [...categoryParams, row.amount_cents],
+    });
+    statements.push({
+      sql: `INSERT INTO splits (transaction_id, account_id, amount_cents)
+            VALUES ((SELECT MAX(id) FROM transactions), ${account.expr}, ?)`,
+      params: [account.param, row.amount_cents === 0 ? 0 : -row.amount_cents],
     });
     paymentInsertCount += 1;
 
@@ -361,7 +408,7 @@ function buildCommitStatements(
 
 /**
  * Commit a reviewed import as ONE atomic `db.batch()` call: entity
- * get-or-create, payment inserts, and the `import_log` append all ride the
+ * get-or-create, transaction inserts, and the `import_log` append all ride the
  * same transaction — one IPC round trip, one fsync. Skip/insert decisions
  * are computed in TS beforehand from one batched existing-rows query, so
  * every review row is accounted for as inserted, skipped-exact, or
@@ -419,7 +466,24 @@ export async function commitReviewedImport(
   const statements = buildCommitStatements(input, rowsToInsert, maps);
 
   reportProgress("committing");
-  const results = await repos.batch(statements);
+  let results;
+  try {
+    results = await repos.batch(statements);
+  } catch (error) {
+    // The unique xlsx-identity index is the loud atomic backstop: after the
+    // any-shape dedup lookup it fires only when one input carries two rows with
+    // the same cell identity. The batch has already rolled back.
+    const message = error instanceof Error ? error.message : String(error);
+    if (/UNIQUE constraint failed: transactions\./.test(message)) {
+      const blocked: Error & { cause?: unknown } = new Error(
+        "import commit blocked: a row's xlsx cell identity collides with an existing transaction " +
+          "(or with another row in this import). No rows were imported.",
+      );
+      blocked.cause = error;
+      throw blocked;
+    }
+    throw error;
+  }
   const importLogId = results[results.length - 1].lastInsertId;
 
   reportProgress("done");

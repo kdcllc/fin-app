@@ -8,9 +8,19 @@ SQLite), the stack recommended in [docs/RESEARCH.md](docs/RESEARCH.md) §3.
 
 ## Features
 
+- **Double-entry ledger** — money lives in accounts (asset, liability, income, expense,
+  equity tree), transactions, and splits; every transaction's splits sum to zero. Books
+  from earlier versions are upgraded automatically on open: a verified backup is taken
+  first, then each payment becomes a balanced two-split transaction and each category an
+  expense account.
+- **Accounts page** — the account tree with balances rolled up to a date, add, edit, and
+  archive accounts, and set opening balances.
+- **Register page** — one account's transactions with a running balance, a multi-split
+  editor that blocks saving while unbalanced, delete with confirmation, and transfer and
+  income forms.
 - **GnuCash integration** — on the GnuCash page: link a sqlite3 book; map fin-app accounts
-  and categories to GnuCash accounts; import transactions with a review step; export payments
-  as QIF or CSV; reconcile against GnuCash.
+  and expense accounts to GnuCash accounts; import transactions (read-only) with a review
+  step.
 - **Automatic backups** — Settings configures timestamped book backups (interval and
   retention); back up on demand or restore from prior backups.
 - **Auto-updates** — Settings checks for updates, downloads and installs them, and
@@ -98,7 +108,7 @@ lookup error above and restart using the command in this section.
 - `src-tauri/` — Rust backend (Tauri commands, config in `src-tauri/tauri.conf.json`)
 - `docs/RESEARCH.md` — research report the project plan is based on
 - `docs/RELEASING.md` — release runbook (minisign-signed updater artifacts; OS installers unsigned)
-- `_goals/` — active goal and task breakdown driving implementation
+- `_memory/work/goals/` — goal and task scratch (gitignored)
 - `goals/` — legacy pre-kit goal archive (read-only history)
 
 > Note: `*.xlsx` files are git-ignored on purpose — the source workbook contains real

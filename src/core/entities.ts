@@ -11,14 +11,22 @@
  *   DB-defaulted columns; optional fields default to NULL.
  */
 
-export type AccountKind = "checking" | "credit" | "cash";
-export type PaymentSource = "manual" | "xlsx" | "gnucash";
+export type AccountKind = "checking" | "credit" | "cash" | "savings" | "loan";
+/** Where a transaction (or legacy payment) came from. */
+export type TransactionSource = "manual" | "xlsx" | "gnucash";
+export type PaymentSource = TransactionSource;
 export type BillFrequency = "monthly" | "quarterly" | "annual";
 
 export interface Account {
   id: number;
   name: string;
   kind: AccountKind;
+  /** Ledger account type (facade over `accounts.type`). */
+  type: AccountType;
+  /** Ledger account subtype (facade over `accounts.subtype`). */
+  subtype: AccountSubtype | null;
+  /** Parent ledger account id (the root placeholder for funding accounts). */
+  parent_id: number | null;
   last4: string | null;
   gnucash_guid: string | null;
   archived: boolean;
@@ -170,4 +178,124 @@ export interface XlsxBusinessKey {
   date: string;
   /** Integer cents — never a float. */
   amount_cents: number;
+}
+
+// ---------------------------------------------------------------------------
+// Double-entry ledger (migration 0009). Split amounts are signed integer
+// cents, debit-positive; every transaction's splits sum to exactly 0.
+// ---------------------------------------------------------------------------
+
+export type AccountType = "ASSET" | "LIABILITY" | "INCOME" | "EXPENSE" | "EQUITY";
+/** ASSET: bank|cash|savings; LIABILITY: credit_card|loan; other types have none. */
+export type AccountSubtype = "bank" | "cash" | "savings" | "credit_card" | "loan";
+export type AccountSystemRole =
+  | "root_asset"
+  | "root_liability"
+  | "root_income"
+  | "root_expense"
+  | "root_equity"
+  | "uncategorized"
+  | "opening_balances";
+/** `n` not reconciled, `c` cleared, `y` reconciled (reconciled splits are locked). */
+export type ReconcileState = "n" | "c" | "y";
+
+/** A row of the rebuilt `accounts` table. */
+export interface LedgerAccount {
+  id: number;
+  name: string;
+  type: AccountType;
+  subtype: AccountSubtype | null;
+  /** NULL only for the five root accounts. */
+  parent_id: number | null;
+  /** Placeholder accounts (the roots) can never carry splits. */
+  placeholder: boolean;
+  system_role: AccountSystemRole | null;
+  last4: string | null;
+  gnucash_guid: string | null;
+  archived: boolean;
+}
+
+export interface NewLedgerAccount {
+  name: string;
+  type: AccountType;
+  /** Default `null`. */
+  subtype?: AccountSubtype | null;
+  /** Parent account id; its `type` must equal this account's `type`. */
+  parent_id: number;
+  /** Default `false`. */
+  placeholder?: boolean;
+  /** Default `null`. */
+  last4?: string | null;
+  /** Default `null`. */
+  gnucash_guid?: string | null;
+}
+
+export type LedgerAccountPatch = Partial<Omit<NewLedgerAccount, "type">> & { archived?: boolean };
+
+export interface Split {
+  id: number;
+  transaction_id: number;
+  account_id: number;
+  /** Signed integer cents, debit-positive — never a float. */
+  amount_cents: number;
+  memo: string | null;
+  reconcile_state: ReconcileState;
+}
+
+export interface NewSplit {
+  account_id: number;
+  /** Signed integer cents, debit-positive — never a float. */
+  amount_cents: number;
+  /** Default `null`. */
+  memo?: string | null;
+  /** Default `"n"`. */
+  reconcile_state?: ReconcileState;
+}
+
+export interface Transaction {
+  id: number;
+  /** ISO date `YYYY-MM-DD`. */
+  date: string;
+  payee_id: number | null;
+  memo: string | null;
+  source: TransactionSource;
+  external_ref: string | null;
+  source_sheet: string | null;
+  source_row: number | null;
+  source_col: number | null;
+  occurrence_index: number | null;
+  /** xlsx identity snapshot; non-NULL whenever `source = "xlsx"`. */
+  import_account_id: number | null;
+  /** xlsx identity snapshot in integer cents; non-NULL whenever `source = "xlsx"`. */
+  import_amount_cents: number | null;
+  /** Set by the DB default `datetime('now')`. */
+  created_at: string;
+  splits: Split[];
+}
+
+export interface NewTransaction {
+  /** ISO date `YYYY-MM-DD`. */
+  date: string;
+  /** Default `null`. */
+  payee_id?: number | null;
+  /** Default `null`. */
+  memo?: string | null;
+  /** Default `"manual"`. */
+  source?: TransactionSource;
+  /** Default `null`. */
+  external_ref?: string | null;
+  /** Required (non-null) when `source = "xlsx"`; default `null`. */
+  source_sheet?: string | null;
+  /** Required when `source = "xlsx"`; default `null`. */
+  source_row?: number | null;
+  /** Required when `source = "xlsx"`; default `null`. */
+  source_col?: number | null;
+  /** Required (>= 1) when `source = "xlsx"`; default `null`. */
+  occurrence_index?: number | null;
+  /** Required when `source = "xlsx"`; default `null`. */
+  import_account_id?: number | null;
+  /** Required when `source = "xlsx"`; integer cents; default `null`. */
+  import_amount_cents?: number | null;
+  /** Must sum to exactly 0 cents. */
+  splits: NewSplit[];
 }

@@ -36,6 +36,9 @@ function createMockRepos(config: MockConfig = {}): Repositories {
       id: 1,
       name: "Checking",
       kind: "checking",
+      type: "ASSET",
+      subtype: "bank",
+      parent_id: 100,
       last4: "1111",
       gnucash_guid: null,
       archived: false,
@@ -44,6 +47,9 @@ function createMockRepos(config: MockConfig = {}): Repositories {
       id: 2,
       name: "Cash Wallet",
       kind: "cash",
+      type: "ASSET",
+      subtype: "cash",
+      parent_id: 100,
       last4: null,
       gnucash_guid: null,
       archived: false,
@@ -93,6 +99,14 @@ function createMockRepos(config: MockConfig = {}): Repositories {
           id: nextAccountId,
           name: input.name,
           kind: input.kind,
+          type: input.kind === "credit" || input.kind === "loan" ? "LIABILITY" : "ASSET",
+          subtype:
+            input.kind === "checking"
+              ? "bank"
+              : input.kind === "credit"
+                ? "credit_card"
+                : input.kind,
+          parent_id: 100,
           last4: input.last4 ?? null,
           gnucash_guid: input.gnucash_guid ?? null,
           archived: false,
@@ -246,6 +260,7 @@ function createMockRepos(config: MockConfig = {}): Repositories {
       },
     },
     importLog: {} as Repositories["importLog"],
+    ledger: {} as Repositories["ledger"],
     payments: {} as Repositories["payments"],
     recurringBills: {} as Repositories["recurringBills"],
     async withTransaction<T>(work: (txRepos: Repositories) => Promise<T>): Promise<T> {

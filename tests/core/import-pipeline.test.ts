@@ -173,10 +173,15 @@ describe("import pipeline end-to-end (raw workbook payload)", () => {
         result.skipped_potential_duplicates,
     ).toBe(annotated.length);
 
-    expect(await tableCount("payments")).toBe(2);
+    expect(await tableCount("transactions")).toBe(2);
+    expect(await tableCount("splits")).toBe(4);
     expect(await tableCount("import_log")).toBe(1);
     const payments = await t.db.select<{ amount_cents: number; date: string }>(
-      "SELECT amount_cents, date FROM payments ORDER BY date",
+      `SELECT s.amount_cents AS amount_cents, t.date AS date
+       FROM transactions t
+       JOIN splits s ON s.transaction_id = t.id
+       JOIN accounts a ON a.id = s.account_id AND a.type = 'EXPENSE'
+       ORDER BY t.date`,
     );
     expect(payments).toEqual([
       { amount_cents: 4858, date: "2026-01-08" },
@@ -199,8 +204,9 @@ describe("import pipeline end-to-end (raw workbook payload)", () => {
     const countsAfterFirst = {
       payees: await tableCount("payees"),
       accounts: await tableCount("accounts"),
-      categories: await tableCount("categories"),
-      payments: await tableCount("payments"),
+      categories: await tableCount("accounts WHERE type = 'EXPENSE'"),
+      payments: await tableCount("transactions"),
+      splits: await tableCount("splits"),
     };
 
     // Full pipeline again from the same raw payload — annotation must mark
@@ -218,8 +224,9 @@ describe("import pipeline end-to-end (raw workbook payload)", () => {
 
     expect(await tableCount("payees")).toBe(countsAfterFirst.payees);
     expect(await tableCount("accounts")).toBe(countsAfterFirst.accounts);
-    expect(await tableCount("categories")).toBe(countsAfterFirst.categories);
-    expect(await tableCount("payments")).toBe(countsAfterFirst.payments);
+    expect(await tableCount("accounts WHERE type = 'EXPENSE'")).toBe(countsAfterFirst.categories);
+    expect(await tableCount("transactions")).toBe(countsAfterFirst.payments);
+    expect(await tableCount("splits")).toBe(countsAfterFirst.splits);
   });
 
   it("handles multi-payment, thousands-separator, no-decimal, and garbage cells", async () => {
@@ -243,7 +250,11 @@ describe("import pipeline end-to-end (raw workbook payload)", () => {
     expect(result.inserted_count).toBe(4);
 
     const payments = await t.db.select<{ amount_cents: number; date: string }>(
-      "SELECT amount_cents, date FROM payments ORDER BY date, amount_cents",
+      `SELECT s.amount_cents AS amount_cents, t.date AS date
+       FROM transactions t
+       JOIN splits s ON s.transaction_id = t.id
+       JOIN accounts a ON a.id = s.account_id AND a.type = 'EXPENSE'
+       ORDER BY t.date, s.amount_cents`,
     );
     // Exact integer cents, including $10,673.91 and the no-decimal $1000.
     expect(payments).toEqual([
@@ -256,6 +267,18 @@ describe("import pipeline end-to-end (raw workbook payload)", () => {
 
   it("rolls back the whole pipeline commit on a mid-batch failure", async () => {
     const review = buildReviewRows(EDGE_CASE_PAYLOAD);
+    const tables = [
+      "payees",
+      "accounts",
+      "accounts WHERE type = 'EXPENSE'",
+      "transactions",
+      "splits",
+      "import_log",
+    ];
+    // `accounts` starts with the seeded roots/system accounts, so compare to
+    // the pre-commit baseline instead of zero.
+    const baseline: number[] = [];
+    for (const table of tables) baseline.push(await tableCount(table));
 
     await expect(
       commitReviewedImport(t.repos, {
@@ -266,8 +289,8 @@ describe("import pipeline end-to-end (raw workbook payload)", () => {
       }),
     ).rejects.toThrow(/injected failure/i);
 
-    for (const table of ["payees", "accounts", "categories", "payments", "import_log"]) {
-      expect(await tableCount(table)).toBe(0);
+    for (const [index, table] of tables.entries()) {
+      expect(await tableCount(table)).toBe(baseline[index]);
     }
   });
 });

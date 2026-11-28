@@ -1,31 +1,21 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
   DatabaseLockedError,
   GnucashMappingConflictError,
   SUPPORTED_GNUCASH_RESAVE,
   applyAccountMapping,
   applyCategoryMapping,
-  buildCsv,
-  buildQif,
   clearMapping,
   commitGnucashImport,
   formatCentsDecimal,
-  listExportablePayments,
   mappingStatus,
   planGnucashImport,
-  reconcile,
-  recordExport,
-  setManualMatch,
-  setManualUnmatch,
   suggestAccountMappings,
   suggestCategoryMappings,
-  summarize,
-  validateForExport,
   type Account,
   type Category,
   type Database,
-  type ExportablePayment,
   type GnucashAccount,
   type GnucashAccountType,
   type GnucashBookProbe,
@@ -43,24 +33,20 @@ import {
   updateGnucashBookState,
   type GnucashBookState,
 } from "../gnucash-book";
-import { exportReportCsv, type ExportReportCsvError } from "../report-csv";
 
 export interface GnuCashPageProps {
   db: Database;
   repos: Repositories;
   pickBookPath?: () => Promise<string | null>;
-  pickSavePath?: (defaultPath: string) => Promise<string | null>;
 }
 
-type GnuCashTab = "link" | "mapping" | "import" | "export" | "reconcile";
+type GnuCashTab = "link" | "mapping" | "import";
 type ImportStep = "setup" | "review" | "done";
 
 const TABS: { id: GnuCashTab; label: string }[] = [
   { id: "link", label: "Link book" },
   { id: "mapping", label: "Account mapping" },
   { id: "import", label: "Import" },
-  { id: "export", label: "Export" },
-  { id: "reconcile", label: "Reconcile" },
 ];
 
 const ACCOUNT_ELIGIBLE_TYPES = new Set<GnucashAccountType>([
@@ -99,7 +85,7 @@ function probeBlockingMessage(probe: GnucashBookProbe): string {
     case "missing":
       return "The linked GnuCash book file could not be found. It may have been moved or deleted.";
     case "xml":
-      return "The linked file is a GnuCash XML book. Convert it to sqlite3 format on the Link book tab before using mapping, import, export, or reconcile.";
+      return "The linked file is a GnuCash XML book. Convert it to sqlite3 format on the Link book tab before using mapping or import.";
     case "unknown-schema":
       return `The linked GnuCash book uses an unsupported schema (${probe.detail}). Re-save the book in GnuCash with GnuCash-Resave ${SUPPORTED_GNUCASH_RESAVE}.`;
     case "unreadable":
@@ -109,16 +95,6 @@ function probeBlockingMessage(probe: GnucashBookProbe): string {
     default:
       return "The linked GnuCash book is not usable.";
   }
-}
-
-function exportWriteErrorMessage(error: unknown): string {
-  if (typeof error === "object" && error !== null && "kind" in error) {
-    const typed = error as ExportReportCsvError;
-    if (typed.kind === "write_failed") {
-      return `Could not write file to ${typed.path}: ${typed.message}`;
-    }
-  }
-  return toUiErrorMessage(error);
 }
 
 function formatDiffValue(field: string, value: string | number | null): string {
@@ -135,9 +111,15 @@ interface AccountTreeNode {
 }
 
 function buildAccountTree(accounts: GnucashAccount[]): AccountTreeNode[] {
+  const knownGuids = new Set(accounts.map((account) => account.guid));
   const childrenByParent = new Map<string | null, GnucashAccount[]>();
   for (const account of accounts) {
-    const parent = account.parent_guid;
+    // Accounts whose parent is absent from the input (e.g. filtered-out ROOT or
+    // placeholder parents) become roots so they are never orphaned.
+    const parent =
+      account.parent_guid !== null && knownGuids.has(account.parent_guid)
+        ? account.parent_guid
+        : null;
     const siblings = childrenByParent.get(parent) ?? [];
     siblings.push(account);
     childrenByParent.set(parent, siblings);
@@ -190,7 +172,7 @@ function tabBlockingReason(
   probing: boolean,
 ): string {
   if (bookPath === null) {
-    return "Link a GnuCash sqlite3 book before using mapping, import, export, or reconcile.";
+    return "Link a GnuCash sqlite3 book before using mapping or import.";
   }
   if (probing || probe === null) {
     return "Checking linked GnuCash book…";
@@ -205,7 +187,6 @@ export function GnuCashPage({
   db,
   repos,
   pickBookPath,
-  pickSavePath,
 }: GnuCashPageProps) {
   const [tab, setTab] = useState<GnuCashTab>("link");
   const [bookState, setBookState] = useState<GnucashBookState | null>(null);
@@ -239,29 +220,6 @@ export function GnuCashPage({
   const [approvedMerges, setApprovedMerges] = useState<Set<string>>(() => new Set());
   const [confirmedPayeeIds, setConfirmedPayeeIds] = useState<Record<string, number>>({});
   const [payees, setPayees] = useState<Payee[]>([]);
-
-  const [exportFrom, setExportFrom] = useState(() => defaultYearDateWindow().from);
-  const [exportTo, setExportTo] = useState(() => defaultYearDateWindow().to);
-  const [includeExported, setIncludeExported] = useState(false);
-  const [exportFormat, setExportFormat] = useState<"qif" | "csv">("qif");
-  const [exportPayments, setExportPayments] = useState<ExportablePayment[]>([]);
-  const [exportLoading, setExportLoading] = useState(false);
-  const [exportBusy, setExportBusy] = useState(false);
-  const [exportError, setExportError] = useState<string | null>(null);
-  const [exportStatus, setExportStatus] = useState<string | null>(null);
-
-  const [reconcileAccountId, setReconcileAccountId] = useState<string>("");
-  const [reconcileFrom, setReconcileFrom] = useState(() => defaultYearDateWindow().from);
-  const [reconcileTo, setReconcileTo] = useState(() => defaultYearDateWindow().to);
-  const [toleranceDays, setToleranceDays] = useState(3);
-  const [reconcileLoading, setReconcileLoading] = useState(false);
-  const [reconcileError, setReconcileError] = useState<string | null>(null);
-  const [reconcileResult, setReconcileResult] = useState<Awaited<ReturnType<typeof reconcile>> | null>(
-    null,
-  );
-  const [manualMatchPaymentId, setManualMatchPaymentId] = useState<string>("");
-  const [manualMatchTxnGuid, setManualMatchTxnGuid] = useState<string>("");
-  const [reconcileBusy, setReconcileBusy] = useState(false);
 
   const bookPath = bookState?.bookPath ?? null;
   const blocked = isTabBlocked(tab, bookPath, probe, probing);
@@ -318,9 +276,6 @@ export function GnuCashPage({
     if (nextTab === "mapping" && !nextBlocked) {
       void loadMappingData();
     }
-    if (nextTab === "reconcile" && !nextBlocked) {
-      void repos.accounts.list({ includeArchived: true }).then(setFinAccounts);
-    }
   }
   const loadMappingData = useCallback(async () => {
     if (bookPath === null || probe?.status !== "ok") return;
@@ -364,15 +319,6 @@ export function GnuCashPage({
     [gnucashAccounts],
   );
 
-  const mappedAccounts = useMemo(
-    () => finAccounts.filter((account) => account.gnucash_guid !== null),
-    [finAccounts],
-  );
-
-  const exportBlockers = useMemo(() => {
-    if (exportPayments.length === 0) return [];
-    return validateForExport(exportPayments, finAccounts, finCategories).blockers;
-  }, [exportPayments, finAccounts, finCategories]);
 
   async function chooseBook() {
     setLinkError(null);
@@ -566,151 +512,6 @@ export function GnuCashPage({
     }
   }
 
-  async function loadExportPayments() {
-    setExportError(null);
-    setExportLoading(true);
-    try {
-      const [payments, accounts, categories] = await Promise.all([
-        listExportablePayments(db, {
-          fromDate: exportFrom,
-          toDate: exportTo,
-          includeExported,
-        }),
-        repos.accounts.list({ includeArchived: true }),
-        repos.categories.list({ includeArchived: true }),
-      ]);
-      setExportPayments(payments);
-      setFinAccounts(accounts);
-      setFinCategories(categories);
-      if (bookPath !== null && probe?.status === "ok") {
-        setGnucashAccounts(await gnucashListAccounts(bookPath));
-      }
-    } catch (error) {
-      setExportError(toUiErrorMessage(error));
-    } finally {
-      setExportLoading(false);
-    }
-  }
-
-  async function runExport() {
-    if (exportPayments.length === 0 || exportBlockers.length > 0) return;
-    setExportError(null);
-    setExportStatus(null);
-    setExportBusy(true);
-    try {
-      const [accounts, categories, allPayees, gcAccounts] = await Promise.all([
-        repos.accounts.list({ includeArchived: true }),
-        repos.categories.list({ includeArchived: true }),
-        repos.payees.list({ includeArchived: true }),
-        bookPath !== null ? gnucashListAccounts(bookPath) : Promise.resolve(gnucashAccounts),
-      ]);
-      const buildInput = {
-        payments: exportPayments,
-        accounts,
-        categories,
-        gnucashAccounts: gcAccounts,
-        payees: allPayees,
-      };
-      const content = exportFormat === "qif" ? buildQif(buildInput) : buildCsv(buildInput);
-      const defaultPath = `gnucash-export.${exportFormat}`;
-      const path =
-        pickSavePath !== undefined
-          ? await pickSavePath(defaultPath)
-          : ((await save({
-              title: "Save GnuCash export",
-              defaultPath,
-              filters: [{ name: exportFormat.toUpperCase(), extensions: [exportFormat] }],
-            })) as string | null);
-
-      if (!path) {
-        return;
-      }
-
-      await exportReportCsv(path, content);
-      await recordExport(
-        db,
-        exportPayments.map((payment) => payment.id),
-        exportFormat,
-      );
-      setExportStatus(
-        `Exported ${exportPayments.length} payment(s) as ${exportFormat.toUpperCase()} to ${path}.`,
-      );
-      await loadExportPayments();
-    } catch (error) {
-      setExportError(exportWriteErrorMessage(error));
-    } finally {
-      setExportBusy(false);
-    }
-  }
-
-  async function runReconcile() {
-    if (bookPath === null) return;
-    const accountId = Number.parseInt(reconcileAccountId, 10);
-    if (!Number.isInteger(accountId)) {
-      setReconcileError("Choose a fin-app account to reconcile.");
-      return;
-    }
-    const account = finAccounts.find((entry) => entry.id === accountId);
-    if (!account?.gnucash_guid) {
-      setReconcileError("Selected account is not mapped to GnuCash.");
-      return;
-    }
-
-    setReconcileError(null);
-    setReconcileLoading(true);
-    try {
-      const [accounts, payments, list] = await Promise.all([
-        repos.accounts.list({ includeArchived: true }),
-        repos.payments.list({
-          accountId,
-          from: reconcileFrom,
-          to: reconcileTo,
-        }),
-        gnucashListTransactions(bookPath, [account.gnucash_guid], reconcileFrom, reconcileTo),
-      ]);
-      setFinAccounts(accounts);
-      const result = await reconcile(db, payments, list, { toleranceDays });
-      setReconcileResult(result);
-    } catch (error) {
-      setReconcileError(toUiErrorMessage(error));
-    } finally {
-      setReconcileLoading(false);
-    }
-  }
-
-  async function applyManualMatch() {
-    const paymentId = Number.parseInt(manualMatchPaymentId, 10);
-    if (!Number.isInteger(paymentId) || manualMatchTxnGuid.length === 0) {
-      setReconcileError("Select both a fin-app payment and a GnuCash transaction to match.");
-      return;
-    }
-    setReconcileBusy(true);
-    setReconcileError(null);
-    try {
-      await setManualMatch(db, paymentId, manualMatchTxnGuid);
-      await runReconcile();
-      setManualMatchPaymentId("");
-      setManualMatchTxnGuid("");
-    } catch (error) {
-      setReconcileError(toUiErrorMessage(error));
-    } finally {
-      setReconcileBusy(false);
-    }
-  }
-
-  async function applyManualUnmatch(paymentId: number, txnGuid: string) {
-    setReconcileBusy(true);
-    setReconcileError(null);
-    try {
-      await setManualUnmatch(db, paymentId, txnGuid);
-      await runReconcile();
-    } catch (error) {
-      setReconcileError(toUiErrorMessage(error));
-    } finally {
-      setReconcileBusy(false);
-    }
-  }
-
   function renderAccountTreeNodes(
     nodes: AccountTreeNode[],
     depth = 0,
@@ -770,8 +571,7 @@ export function GnuCashPage({
     return (
       <>
         <p className="muted">
-          Link a GnuCash sqlite3 book for mapping, import, export, and reconcile. XML books must
-          be converted first.
+          Link a GnuCash sqlite3 book for mapping and import. XML books must be converted first.
         </p>
         <div className="import-actions">
           <button
@@ -1364,346 +1164,6 @@ export function GnuCashPage({
     );
   }
 
-  function renderExportTab(): ReactNode {
-    if (blocked) return renderBlockingPanel();
-
-    return (
-      <>
-        <p className="muted">Export fin-app payments to QIF or CSV for GnuCash.</p>
-        <div className="reports-filters">
-          <label className="field">
-            From
-            <input
-              aria-label="Export from date"
-              type="date"
-              value={exportFrom}
-              onChange={(event) => setExportFrom(event.currentTarget.value)}
-            />
-          </label>
-          <label className="field">
-            To
-            <input
-              aria-label="Export to date"
-              type="date"
-              value={exportTo}
-              onChange={(event) => setExportTo(event.currentTarget.value)}
-            />
-          </label>
-          <label className="field">
-            Format
-            <select
-              aria-label="Export format"
-              value={exportFormat}
-              onChange={(event) => setExportFormat(event.currentTarget.value as "qif" | "csv")}
-            >
-              <option value="qif">QIF</option>
-              <option value="csv">CSV</option>
-            </select>
-          </label>
-          <label className="field">
-            <input
-              type="checkbox"
-              checked={includeExported}
-              onChange={(event) => setIncludeExported(event.currentTarget.checked)}
-            />{" "}
-            Include previously exported payments
-          </label>
-        </div>
-        <div className="import-actions">
-          <button
-            type="button"
-            disabled={exportLoading}
-            onClick={() => void loadExportPayments()}
-          >
-            {exportLoading ? "Loading payments…" : "Load payments"}
-          </button>
-          <button
-            type="button"
-            className="primary"
-            disabled={
-              exportBusy || exportLoading || exportPayments.length === 0 || exportBlockers.length > 0
-            }
-            onClick={() => void runExport()}
-          >
-            {exportBusy ? "Exporting…" : "Export"}
-          </button>
-        </div>
-        {exportError !== null && <p className="error">{exportError}</p>}
-        {exportStatus !== null && <p className="status">{exportStatus}</p>}
-        {exportBlockers.length > 0 && (
-          <section className="import-panel">
-            <h2>Mapping blockers</h2>
-            <ul>
-              {exportBlockers.map((blocker) => (
-                <li key={`export-blocker-${blocker.paymentId}`}>
-                  Payment #{blocker.paymentId}: {blocker.reason}
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
-        {exportPayments.length > 0 && (
-          <section className="import-panel">
-            <h2>Payments ({exportPayments.length})</h2>
-            <table className="import-table">
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Amount</th>
-                  <th>Memo</th>
-                  <th>Exported</th>
-                </tr>
-              </thead>
-              <tbody>
-                {exportPayments.map((payment) => (
-                  <tr key={`export-payment-${payment.id}`}>
-                    <td>{payment.date}</td>
-                    <td>{toCurrency(payment.amount_cents)}</td>
-                    <td>{payment.memo ?? "—"}</td>
-                    <td>
-                      {payment.exportHistory.length > 0
-                        ? payment.exportHistory
-                            .map((entry) => `${entry.format} @ ${entry.exportedAt}`)
-                            .join("; ")
-                        : "—"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </section>
-        )}
-      </>
-    );
-  }
-
-  function renderReconcileTab(): ReactNode {
-    if (blocked) return renderBlockingPanel();
-
-    const summaries =
-      reconcileResult !== null && reconcileAccountId.length > 0
-        ? summarize(reconcileResult).filter(
-            (entry) => entry.accountId === Number.parseInt(reconcileAccountId, 10),
-          )
-        : [];
-
-    return (
-      <>
-        <p className="muted">Compare fin-app payments with GnuCash transactions for a mapped account.</p>
-        <div className="reports-filters">
-          <label className="field">
-            Account
-            <select
-              aria-label="Reconcile account"
-              value={reconcileAccountId}
-              onChange={(event) => setReconcileAccountId(event.currentTarget.value)}
-            >
-              <option value="">Choose account…</option>
-              {mappedAccounts.map((account) => (
-                <option key={account.id} value={String(account.id)}>
-                  {account.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="field">
-            From
-            <input
-              aria-label="Reconcile from date"
-              type="date"
-              value={reconcileFrom}
-              onChange={(event) => setReconcileFrom(event.currentTarget.value)}
-            />
-          </label>
-          <label className="field">
-            To
-            <input
-              aria-label="Reconcile to date"
-              type="date"
-              value={reconcileTo}
-              onChange={(event) => setReconcileTo(event.currentTarget.value)}
-            />
-          </label>
-          <label className="field">
-            Tolerance (± days)
-            <input
-              aria-label="Reconcile tolerance days"
-              type="number"
-              min={0}
-              value={toleranceDays}
-              onChange={(event) => {
-                const next = Number.parseInt(event.currentTarget.value, 10);
-                if (Number.isInteger(next) && next >= 0) setToleranceDays(next);
-              }}
-            />
-          </label>
-        </div>
-        <div className="import-actions">
-          <button
-            type="button"
-            className="primary"
-            disabled={reconcileLoading || reconcileBusy}
-            onClick={() => void runReconcile()}
-          >
-            {reconcileLoading ? "Running reconcile…" : "Run reconcile"}
-          </button>
-        </div>
-        {reconcileError !== null && <p className="error">{reconcileError}</p>}
-
-        {summaries.map((summary) => (
-          <p key={`reconcile-summary-${summary.accountId}`} className="status">
-            Matched {summary.matchedCount} ({toCurrency(summary.matchedTotalCents)}), fin-app only{" "}
-            {summary.finAppOnlyCount} ({toCurrency(summary.finAppOnlyTotalCents)}), GnuCash only{" "}
-            {summary.gnucashOnlyCount} ({toCurrency(summary.gnucashOnlyTotalCents)})
-          </p>
-        ))}
-
-        {reconcileResult !== null && reconcileResult.readerErrors.length > 0 && (
-          <section className="import-panel">
-            <h2>Reader errors</h2>
-            <ul>
-              {reconcileResult.readerErrors.map((error) => (
-                <li key={`reconcile-reader-${error.txn_guid}`}>
-                  {error.txn_guid}: {error.reason}
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
-
-        {reconcileResult !== null && (
-          <>
-            <section className="import-panel">
-              <h2>Matched ({reconcileResult.matched.length})</h2>
-              <table className="import-table">
-                <thead>
-                  <tr>
-                    <th>Payment</th>
-                    <th>GnuCash txn</th>
-                    <th>Amount</th>
-                    <th>Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {reconcileResult.matched.map((pair) => (
-                    <tr key={`matched-${pair.payment.id}-${pair.transaction.txn_guid}`}>
-                      <td>
-                        #{pair.payment.id} {pair.payment.date}
-                      </td>
-                      <td>
-                        {pair.transaction.txn_guid} {pair.transaction.post_date}
-                      </td>
-                      <td>{toCurrency(pair.payment.amount_cents)}</td>
-                      <td>
-                        <button
-                          type="button"
-                          disabled={reconcileBusy}
-                          onClick={() =>
-                            void applyManualUnmatch(pair.payment.id, pair.transaction.txn_guid)
-                          }
-                        >
-                          Unmatch
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </section>
-
-            <section className="import-panel">
-              <h2>Fin-app only ({reconcileResult.finAppOnly.length})</h2>
-              <table className="import-table">
-                <thead>
-                  <tr>
-                    <th>Payment</th>
-                    <th>Date</th>
-                    <th>Amount</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {reconcileResult.finAppOnly.map((payment) => (
-                    <tr key={`fin-only-${payment.id}`}>
-                      <td>#{payment.id}</td>
-                      <td>{payment.date}</td>
-                      <td>{toCurrency(payment.amount_cents)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </section>
-
-            <section className="import-panel">
-              <h2>GnuCash only ({reconcileResult.gnucashOnly.length})</h2>
-              <table className="import-table">
-                <thead>
-                  <tr>
-                    <th>Txn GUID</th>
-                    <th>Date</th>
-                    <th>Description</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {reconcileResult.gnucashOnly.map((txn) => (
-                    <tr key={`gc-only-${txn.txn_guid}`}>
-                      <td>{txn.txn_guid}</td>
-                      <td>{txn.post_date}</td>
-                      <td>{txn.description}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </section>
-
-            <section className="import-panel">
-              <h2>Manual match</h2>
-              <div className="reports-filters">
-                <label className="field">
-                  Fin-app payment
-                  <select
-                    aria-label="Manual match payment"
-                    value={manualMatchPaymentId}
-                    onChange={(event) => setManualMatchPaymentId(event.currentTarget.value)}
-                  >
-                    <option value="">Choose payment…</option>
-                    {reconcileResult.finAppOnly.map((payment) => (
-                      <option key={`manual-payment-${payment.id}`} value={String(payment.id)}>
-                        #{payment.id} {payment.date} {toCurrency(payment.amount_cents)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="field">
-                  GnuCash transaction
-                  <select
-                    aria-label="Manual match transaction"
-                    value={manualMatchTxnGuid}
-                    onChange={(event) => setManualMatchTxnGuid(event.currentTarget.value)}
-                  >
-                    <option value="">Choose transaction…</option>
-                    {reconcileResult.gnucashOnly.map((txn) => (
-                      <option key={`manual-txn-${txn.txn_guid}`} value={txn.txn_guid}>
-                        {txn.txn_guid} {txn.post_date}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-              <button
-                type="button"
-                className="primary"
-                disabled={reconcileBusy}
-                onClick={() => void applyManualMatch()}
-              >
-                Match selected
-              </button>
-            </section>
-          </>
-        )}
-      </>
-    );
-  }
-
   function renderActiveTab(): ReactNode {
     switch (tab) {
       case "link":
@@ -1712,17 +1172,13 @@ export function GnuCashPage({
         return renderMappingTab();
       case "import":
         return renderImportTab();
-      case "export":
-        return renderExportTab();
-      case "reconcile":
-        return renderReconcileTab();
     }
   }
 
   return (
     <section className="page">
       <h1>GnuCash</h1>
-      <p className="muted">Link your GnuCash book, map accounts, import, export, and reconcile.</p>
+      <p className="muted">Link your GnuCash book, map accounts, and import.</p>
 
       <div className="import-actions" role="tablist" aria-label="GnuCash sections">
         {TABS.map((entry) => (

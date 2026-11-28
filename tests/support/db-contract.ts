@@ -40,18 +40,25 @@ export function describeDatabaseContract(
       it("commits all statements atomically with per-statement results", async () => {
         const results = await db.batch([
           { sql: "INSERT INTO payees (name) VALUES (?)", params: ["Water Co"] },
-          { sql: "INSERT INTO accounts (name, kind) VALUES (?, ?)", params: ["Checking", "checking"] },
           {
-            sql: "INSERT INTO payments (payee_id, account_id, date, amount_cents, source) VALUES (?, ?, ?, ?, ?)",
-            params: [1, 1, "2026-01-15", 9999, "manual"],
+            sql: "INSERT INTO accounts (name, type, subtype, parent_id) VALUES (?, 'ASSET', 'bank', (SELECT id FROM accounts WHERE system_role = 'root_asset'))",
+            params: ["Checking"],
+          },
+          {
+            sql: "INSERT INTO import_log (source_file, content_hash, row_count) VALUES (?, ?, ?)",
+            params: ["fixture.xlsx", "hash-1", 3],
           },
         ]);
 
         expect(results).toHaveLength(3);
         expect(results.every((r) => r.rowsAffected === 1)).toBe(true);
         expect(await count("payees")).toBe(1);
-        expect(await count("accounts")).toBe(1);
-        expect(await count("payments")).toBe(1);
+        const checking = await db.select<{ n: number }>(
+          "SELECT COUNT(*) AS n FROM accounts WHERE name = ?",
+          ["Checking"],
+        );
+        expect(checking[0].n).toBe(1);
+        expect(await count("import_log")).toBe(1);
       });
 
       it("reports the correct lastInsertId per statement", async () => {
@@ -79,22 +86,22 @@ export function describeDatabaseContract(
             { sql: "INSERT INTO payees (name) VALUES (?)", params: ["Power Co"] },
             {
               // Statement index 2: dangling FK — must fail the whole batch.
-              sql: "INSERT INTO payments (payee_id, account_id, date, amount_cents, source) VALUES (?, ?, ?, ?, ?)",
-              params: [999, 999, "2026-01-01", 500, "manual"],
+              sql: "INSERT INTO payees (name, default_account_id) VALUES (?, ?)",
+              params: ["Ghost", 999],
             },
             { sql: "INSERT INTO payees (name) VALUES (?)", params: ["Gas Co"] },
           ]),
         ).rejects.toThrow(/batch statement 2 failed/);
         expect(await count("payees")).toBe(0);
-        expect(await count("payments")).toBe(0);
+        expect(await count("import_log")).toBe(0);
       });
 
       it("maps a FOREIGN KEY failure inside a batch to ForeignKeyViolationError", async () => {
         await expect(
           db.batch([
             {
-              sql: "INSERT INTO payments (payee_id, account_id, date, amount_cents, source) VALUES (?, ?, ?, ?, ?)",
-              params: [999, 999, "2026-01-01", 500, "manual"],
+              sql: "INSERT INTO payees (name, default_account_id) VALUES (?, ?)",
+              params: ["Ghost", 999],
             },
           ]),
         ).rejects.toBeInstanceOf(ForeignKeyViolationError);
@@ -144,8 +151,8 @@ export function describeDatabaseContract(
         const fkError = await db
           .batch([
             {
-              sql: "INSERT INTO payments (payee_id, account_id, date, amount_cents, source) VALUES (?, ?, ?, ?, ?)",
-              params: [999, 999, "2026-01-01", 500, "manual"],
+              sql: "INSERT INTO payees (name, default_account_id) VALUES (?, ?)",
+              params: ["Ghost", 999],
             },
           ])
           .then(
@@ -205,8 +212,8 @@ export function describeDatabaseContract(
           db.transaction(async (tx) => {
             await tx.execute("INSERT INTO payees (name) VALUES (?)", ["Water Co"]);
             await tx.execute(
-              "INSERT INTO payments (payee_id, account_id, date, amount_cents, source) VALUES (?, ?, ?, ?, ?)",
-              [999, 999, "2026-01-01", 500, "manual"],
+              "INSERT INTO payees (name, default_account_id) VALUES (?, ?)",
+              ["Ghost", 999],
             );
           }),
         ).rejects.toBeInstanceOf(ForeignKeyViolationError);

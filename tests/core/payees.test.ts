@@ -114,4 +114,23 @@ describe("payees repository", () => {
     await expect(t.repos.payees.merge(payee.id, payee.id)).rejects.toThrow(PayeeMergeError);
     await expect(t.repos.payees.merge(payee.id, 9999)).rejects.toThrow(PayeeMergeError);
   });
+
+  it("rejects existing ids of the wrong kind with ValidationError", async () => {
+    const account = await t.repos.accounts.insert({ name: "Checking", kind: "checking" });
+    const category = await t.repos.categories.insert({ name: "Utilities" });
+    await expect(
+      t.repos.payees.insert({ name: "Wrong", default_category_id: account.id }),
+    ).rejects.toThrow(ValidationError);
+    await expect(
+      t.repos.payees.insert({ name: "Wrong", default_account_id: category.id }),
+    ).rejects.toThrow(ValidationError);
+
+    const payee = await t.repos.payees.insert({ name: "Right" });
+    await expect(
+      t.repos.payees.update(payee.id, { default_category_id: account.id }),
+    ).rejects.toThrow(ValidationError);
+    await expect(t.repos.payees.update(payee.id, { default_account_id: 555 })).rejects.toThrow(
+      ForeignKeyViolationError,
+    );
+  });
 });
