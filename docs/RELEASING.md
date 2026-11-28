@@ -45,10 +45,13 @@ updater public key. Any build that produces updater artifacts (including
 `~/.tauri/fin-app.key`. Without it, Tauri fails the bundle when a pubkey is
 configured but no signing key is present.
 
-In CI, the platform build jobs (`build-tauri`) run **only on `v*` tag pushes** —
-PRs and pushes to `main` run just the quality gates (lint, typecheck, Vitest, Rust
-tests, clippy). This keeps Actions minutes low (macOS bills at 10x, Windows at 2x)
-and means non-tag CI never needs the signing secret.
+In CI, the platform build jobs (`build-tauri`) run on PRs, pushes to `main`, and
+`v*` tags. Non-tag builds disable updater artifacts via a workflow overlay
+(`src-tauri/ci-updater-off.json`, written at build time) so they never need the
+signing secret, publish nothing, and run the three platforms in parallel; their
+installers are uploaded as workflow artifacts and `verify-release` checks that
+Linux, Windows, and macOS installers are all present. Note the cost: macOS bills
+at 10x and Windows at 2x Actions minutes on every PR and `main` push.
 
 ## Private key backup
 
@@ -86,8 +89,8 @@ If you **regenerate** the keypair:
 CI then:
 
 - Runs quality gates (lint, tests, clippy).
-- Builds installers on Linux, Windows, and macOS — these platform jobs run **only on
-  tag pushes**, serialized to avoid a `latest.json` race (see workflow comments in
+- Builds installers on Linux, Windows, and macOS — on tag builds these jobs are
+  serialized to avoid a `latest.json` race (see workflow comments in
   `.github/workflows/ci.yml`).
 - Signs updater artifacts with the minisign key.
 - Publishes bundles, `.sig` files, and `latest.json` to
