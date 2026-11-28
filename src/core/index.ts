@@ -48,6 +48,7 @@ import {
   type RecurringDashboardMonth,
   type RecurringDashboardOptions,
 } from "./recurring-dashboard";
+import { createLedgerRepo, type LedgerRepo } from "./repositories/ledger";
 import { createImportLogRepo, type ImportLogRepo } from "./repositories/import-log";
 import { createPaymentsRepo, type PaymentsRepo } from "./repositories/payments";
 import { createPayeesRepo, type PayeesRepo } from "./repositories/payees";
@@ -77,6 +78,50 @@ export {
   isSqliteLockErrorMessage,
   mapSqliteError,
 } from "./errors";
+export {
+  ReconciledTransactionError,
+  SPLIT_COUNTERPART_LABEL,
+  UnbalancedTransactionError,
+  balanceAsOf,
+  createIncome,
+  createTransfer,
+  deleteTransaction,
+  getAccountTree,
+  getRegister,
+  getTransaction,
+  naturalBalance,
+  postTransaction,
+  setOpeningBalance,
+  updateTransaction,
+} from "./ledger";
+export type {
+  AccountTreeNode,
+  AccountTreeOptions,
+  BalanceOptions,
+  IncomeInput,
+  RegisterRow,
+  TransferInput,
+} from "./ledger";
+export type {
+  AccountBalanceRow,
+  LedgerRepo,
+  RegisterQuery,
+  RegisterSplitRow,
+} from "./repositories/ledger";
+export type {
+  AccountSubtype,
+  AccountSystemRole,
+  AccountType,
+  LedgerAccount,
+  LedgerAccountPatch,
+  NewLedgerAccount,
+  NewSplit,
+  NewTransaction,
+  ReconcileState,
+  Split,
+  Transaction,
+  TransactionSource,
+} from "./entities";
 export { parsePaymentCells } from "./cell-parser";
 export { buildPayeeProposals, normalizePayeeLabel } from "./payee-normalization";
 export type {
@@ -210,40 +255,13 @@ export type {
   GnucashImportPlanUpdatedRow,
   GnucashImportResult,
 } from "./gnucash-import";
-export {
-  buildCsv,
-  buildQif,
-  listExportablePayments,
-  recordExport,
-  validateForExport,
-} from "./gnucash-export";
-export type {
-  ExportBlocker,
-  ExportBuildInput,
-  ExportFilters,
-  ExportHistoryEntry,
-  ExportValidation,
-  ExportablePayment,
-} from "./gnucash-export";
-export {
-  clearOverride,
-  reconcile,
-  setManualMatch,
-  setManualUnmatch,
-  summarize,
-} from "./gnucash-reconcile";
-export type {
-  ReconcileMatchedPair,
-  ReconcileOptions,
-  ReconcileResult,
-  ReconcileSummary,
-} from "./gnucash-reconcile";
 
 /** Every repository, wired to one database connection. */
 export interface Repositories {
   accounts: AccountsRepo;
   categories: CategoriesRepo;
   importLog: ImportLogRepo;
+  ledger: LedgerRepo;
   payees: PayeesRepo;
   payments: PaymentsRepo;
   recurringBills: RecurringBillsRepo;
@@ -260,12 +278,14 @@ export interface Repositories {
 /** Wire all repositories to a `Database` (any adapter). */
 export function createRepositories(db: Database): Repositories {
   function wire(database: Database): Repositories {
+    const ledger = createLedgerRepo(database);
     const repos: Repositories = {
-      accounts: createAccountsRepo(database),
-      categories: createCategoriesRepo(database),
+      accounts: createAccountsRepo(database, ledger),
+      categories: createCategoriesRepo(database, ledger),
       importLog: createImportLogRepo(database),
-      payees: createPayeesRepo(database),
-      payments: createPaymentsRepo(database),
+      ledger,
+      payees: createPayeesRepo(database, ledger),
+      payments: createPaymentsRepo(database, ledger),
       recurringBills: createRecurringBillsRepo(database),
       batch(statements: BatchStatement[]): Promise<ExecuteResult[]> {
         return database.batch(statements);

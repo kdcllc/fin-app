@@ -1,7 +1,13 @@
 import type { Database } from "../db";
 import type { NewPayee, Payee, PayeePatch } from "../entities";
-import { EntityInUseError, PayeeMergeError, ValidationError } from "../errors";
+import {
+  EntityInUseError,
+  ForeignKeyViolationError,
+  PayeeMergeError,
+  ValidationError,
+} from "../errors";
 import { buildUpdate } from "./helpers";
+import { createLedgerRepo, type LedgerRepo } from "./ledger";
 
 interface PayeeRow {
   id: number;
@@ -37,7 +43,10 @@ export interface PayeesRepo {
   merge(survivorId: number, sourceId: number): Promise<{ reassignedPayments: number }>;
 }
 
-export function createPayeesRepo(db: Database): PayeesRepo {
+export function createPayeesRepo(
+  db: Database,
+  ledger: LedgerRepo = createLedgerRepo(db),
+): PayeesRepo {
   async function get(id: number): Promise<Payee | null> {
     const rows = await db.select<PayeeRow>(`SELECT ${COLUMNS} FROM payees WHERE id = ?`, [id]);
     return rows.length > 0 ? toPayee(rows[0]) : null;
@@ -60,6 +69,34 @@ export function createPayeesRepo(db: Database): PayeesRepo {
     }
   }
 
+  /** Unknown id → ForeignKeyViolationError; existing but not an EXPENSE category → ValidationError. */
+  async function assertDefaultCategory(id: number | null | undefined): Promise<void> {
+    if (id === undefined || id === null) return;
+    const account = await ledger.getAccount(id);
+    if (account === null) {
+      throw new ForeignKeyViolationError(`Default category ${id} does not exist.`);
+    }
+    if (account.type !== "EXPENSE" || account.system_role !== null || account.placeholder) {
+      throw new ValidationError("A payee's default category must be an expense category.");
+    }
+  }
+
+  /** Unknown id → ForeignKeyViolationError; existing but not a funding account → ValidationError. */
+  async function assertDefaultAccount(id: number | null | undefined): Promise<void> {
+    if (id === undefined || id === null) return;
+    const account = await ledger.getAccount(id);
+    if (account === null) {
+      throw new ForeignKeyViolationError(`Default account ${id} does not exist.`);
+    }
+    if (
+      (account.type !== "ASSET" && account.type !== "LIABILITY") ||
+      account.system_role !== null ||
+      account.placeholder
+    ) {
+      throw new ValidationError("A payee's default account must be a funding account.");
+    }
+  }
+
   async function count(sql: string, params: Array<string | number | null>): Promise<number> {
     const rows = await db.select<{ count: number }>(sql, params);
     return rows[0]?.count ?? 0;
@@ -78,6 +115,8 @@ export function createPayeesRepo(db: Database): PayeesRepo {
 
     async insert(payee) {
       assertValidNewPayee(payee);
+      await assertDefaultCategory(payee.default_category_id);
+      await assertDefaultAccount(payee.default_account_id);
       const result = await db.execute(
         "INSERT INTO payees (name, default_category_id, default_account_id, notes) VALUES (?, ?, ?, ?)",
         [
@@ -94,6 +133,8 @@ export function createPayeesRepo(db: Database): PayeesRepo {
 
     async update(id, patch) {
       assertValidPayeePatch(patch);
+      await assertDefaultCategory(patch.default_category_id);
+      await assertDefaultAccount(patch.default_account_id);
       const statement = buildUpdate(
         "payees",
         {
@@ -117,7 +158,7 @@ export function createPayeesRepo(db: Database): PayeesRepo {
       const existing = await get(id);
       if (!existing) return false;
 
-      const paymentRefs = await count("SELECT COUNT(*) AS count FROM payments WHERE payee_id = ?", [id]);
+      const paymentRefs = await count("SELECT COUNT(*) AS count FROM transactions WHERE payee_id = ?", [id]);
       if (paymentRefs > 0) {
         throw new EntityInUseError(
           "Cannot delete this payee because payment history references it. Archive the payee instead.",
@@ -161,7 +202,7 @@ export function createPayeesRepo(db: Database): PayeesRepo {
         }
 
         const reassigned = await txDb.execute(
-          "UPDATE payments SET payee_id = ? WHERE payee_id = ?",
+          "UPDATE transactions SET payee_id = ? WHERE payee_id = ?",
           [survivorId, sourceId],
         );
 

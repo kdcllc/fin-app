@@ -18,7 +18,8 @@ reads:               # [interface briefs this task depends on, read-only]
   - [path]           # [exported symbols and signatures only, never edited here]
 depends_on:          # [task ids that must land before this one, or [] for none — always
                      #  QUOTE each id so it stays the task file's name prefix; unquoted
-                     #  numerics parse as YAML integers and break id comparisons]
+                     #  numerics parse as YAML integers and break id comparisons;
+                     #  corrective tasks use NN<letter> ids (e.g. 09a-fix-api)]
   - "NN-name"
 owner: [implementer|test-writer]     # [one writer for every path above]
 rewrite_semantics: [whole-file|targeted-insertion]
@@ -26,11 +27,12 @@ rewrite_semantics: [whole-file|targeted-insertion]
 #  them wholesale and never assumes another agent will reconcile the result.
 #  targeted-insertion is for large shared documents: surgical edits that leave every
 #  unrelated line untouched.]
-eval_depth: [full|light]
-# [orchestrator-set at planning time — never set by a worker. Default: full. light is a
-#  shortened rubric (requirements walk + targeted tests + write-fence check only,
-#  skipping the deep correctness/reuse dimensions) — light NEVER skips evaluation,
-#  every task still ends in a real verdict.]
+eval_depth: [light|full]
+# [orchestrator-set at planning time — never set by a worker. Default: light. full is
+#  required (state why) for contract tasks, tasks with interface consumers (mirroring,
+#  documenting, or testing the output does not count), and tasks
+#  writing agents/criteria/drivers/shared infra — light NEVER skips evaluation, every
+#  task still ends in a real verdict.]
 ```
 
 ## Requirements (exhaustive — the evaluator verifies every item)
@@ -38,6 +40,17 @@ eval_depth: [full|light]
 - [ ] [Specific, verifiable requirement]
 - [ ] [Error handling requirement — what happens on failure X]
 - [ ] [...]
+
+## Acceptance Criteria
+
+Command criteria need a `criteria-evidence.md` entry (run output; true negative and true positive for content-inspecting checks).
+
+1. [Specific, verifiable criterion] — verification: [unit test | integration test | command output | live interaction | screenshot]
+2. [Specific, verifiable criterion] — verification: [unit test | integration test | command output | live interaction | screenshot]
+3. [...]
+
+These criteria absorb the former contract's done-definition precision and out-of-scope
+note; the Phase 3 goal evaluator validates them once for all tasks.
 
 ## Files to Read
 

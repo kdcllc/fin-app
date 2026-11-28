@@ -115,7 +115,10 @@ describe("import speed guard (generated 1,008-payment fixture)", () => {
 
     // Every row landed, with exact integer-cent totals.
     const [{ n, total }] = await t.db.select<{ n: number; total: number }>(
-      "SELECT COUNT(*) AS n, SUM(amount_cents) AS total FROM payments",
+      `SELECT COUNT(*) AS n, SUM(s.amount_cents) AS total
+       FROM transactions t
+       JOIN splits s ON s.transaction_id = t.id
+       JOIN accounts a ON a.id = s.account_id AND a.type = 'EXPENSE'`,
     );
     expect(n).toBe(PAYMENT_COUNT);
     expect(total).toBe(expectedTotalCents);

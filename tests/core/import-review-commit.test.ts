@@ -8,8 +8,12 @@ import {
   commitReviewedImport,
   type ImportCommitProgress,
   type ImportReviewRow,
+  updateTransaction,
 } from "../../src/core";
 import { openTestDb, type TestDb } from "../support/test-db";
+
+/** `categories` are the non-system EXPENSE accounts (usable as a `FROM` clause). */
+const CATEGORY_ACCOUNTS = "accounts WHERE type = 'EXPENSE' AND system_role IS NULL";
 
 const FIXTURES_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../fixtures/excel");
 
@@ -123,8 +127,8 @@ describe("import review commit", () => {
     const before = {
       payees: await tableCount("payees"),
       accounts: await tableCount("accounts"),
-      categories: await tableCount("categories"),
-      payments: await tableCount("payments"),
+      categories: await tableCount(CATEGORY_ACCOUNTS),
+      payments: await tableCount("transactions"),
       importLog: await tableCount("import_log"),
     };
 
@@ -133,8 +137,8 @@ describe("import review commit", () => {
 
     expect(await tableCount("payees")).toBe(before.payees);
     expect(await tableCount("accounts")).toBe(before.accounts);
-    expect(await tableCount("categories")).toBe(before.categories);
-    expect(await tableCount("payments")).toBe(before.payments);
+    expect(await tableCount(CATEGORY_ACCOUNTS)).toBe(before.categories);
+    expect(await tableCount("transactions")).toBe(before.payments);
     expect(await tableCount("import_log")).toBe(before.importLog);
   });
 
@@ -201,11 +205,21 @@ describe("import review commit", () => {
     expect(during.filter((call) => call.kind === "batch")).toHaveLength(1);
     expect(during.filter((call) => call.kind === "execute")).toHaveLength(0);
 
-    expect(await tableCount("payments")).toBe(2);
+    expect(await tableCount("transactions")).toBe(2);
+    expect(await tableCount("splits")).toBe(4);
     expect(await tableCount("import_log")).toBe(1);
   });
 
   it("rolls back payees/accounts/categories/payments/import_log on injected failure", async () => {
+    // `accounts` starts with the seeded roots/system accounts: compare to the baseline.
+    const baseline = {
+      payees: await tableCount("payees"),
+      accounts: await tableCount("accounts"),
+      transactions: await tableCount("transactions"),
+      splits: await tableCount("splits"),
+      importLog: await tableCount("import_log"),
+    };
+
     await expect(
       commitReviewedImport(t.repos, {
         source_file: "fixture.xlsx",
@@ -223,11 +237,12 @@ describe("import review commit", () => {
       }),
     ).rejects.toThrow(/injected failure/i);
 
-    expect(await tableCount("payees")).toBe(0);
-    expect(await tableCount("accounts")).toBe(0);
-    expect(await tableCount("categories")).toBe(0);
-    expect(await tableCount("payments")).toBe(0);
-    expect(await tableCount("import_log")).toBe(0);
+    expect(await tableCount("payees")).toBe(baseline.payees);
+    expect(await tableCount("accounts")).toBe(baseline.accounts);
+    expect(await tableCount(CATEGORY_ACCOUNTS)).toBe(0);
+    expect(await tableCount("transactions")).toBe(baseline.transactions);
+    expect(await tableCount("splits")).toBe(baseline.splits);
+    expect(await tableCount("import_log")).toBe(baseline.importLog);
   });
 
   it("blocks commit when a row transitions from new to potential duplicate at commit time", async () => {
@@ -258,7 +273,7 @@ describe("import review commit", () => {
       }),
     ).rejects.toThrow(/requires keep\/skip duplicate decision/i);
 
-    expect(await tableCount("payments")).toBe(1);
+    expect(await tableCount("transactions")).toBe(1);
     expect(await tableCount("import_log")).toBe(0);
   });
 
@@ -278,7 +293,7 @@ describe("import review commit", () => {
     const entityCountsAfterFirst = {
       payees: await tableCount("payees"),
       accounts: await tableCount("accounts"),
-      categories: await tableCount("categories"),
+      categories: await tableCount(CATEGORY_ACCOUNTS),
     };
 
     const second = await commitReviewedImport(t.repos, {
@@ -295,9 +310,9 @@ describe("import review commit", () => {
     // Entity idempotency at the table level: no new payees/accounts/categories.
     expect(await tableCount("payees")).toBe(entityCountsAfterFirst.payees);
     expect(await tableCount("accounts")).toBe(entityCountsAfterFirst.accounts);
-    expect(await tableCount("categories")).toBe(entityCountsAfterFirst.categories);
+    expect(await tableCount(CATEGORY_ACCOUNTS)).toBe(entityCountsAfterFirst.categories);
 
-    expect(await tableCount("payments")).toBe(2);
+    expect(await tableCount("transactions")).toBe(2);
     expect(await tableCount("import_log")).toBe(2);
   });
 
@@ -320,7 +335,7 @@ describe("import review commit", () => {
     });
     expect(result.inserted_count).toBe(1);
     expect(result.skipped_exact_duplicates).toBe(2);
-    expect(await tableCount("payments")).toBe(3);
+    expect(await tableCount("transactions")).toBe(3);
   });
 
   it("reconciles inserted + skipped counts with the input row count", async () => {
@@ -381,7 +396,7 @@ describe("import review commit", () => {
       result.inserted_count + result.skipped_exact_duplicates + result.skipped_potential_duplicates,
     ).toBe(rows.length);
 
-    expect(await tableCount("payments")).toBe(3 + result.inserted_count);
+    expect(await tableCount("transactions")).toBe(3 + result.inserted_count);
     const log = await t.repos.importLog.list();
     expect(log).toHaveLength(1);
     expect(log[0].id).toBe(result.import_log_id);
@@ -449,9 +464,260 @@ describe("import review commit", () => {
     });
     expect(result.inserted_count).toBe(1);
 
-    expect(await tableCount("categories")).toBe(1);
+    expect(await tableCount(CATEGORY_ACCOUNTS)).toBe(1);
     const [payment] = await t.repos.payments.list({ from: "2026-01-01", to: "2026-12-31" });
     expect(payment.category_id).toBe(archived.id);
+  });
+
+  it("writes a balanced expense/funding split pair for every imported transaction", async () => {
+    await commitReviewedImport(t.repos, {
+      source_file: "fixture.xlsx",
+      content_hash: "hash-balanced",
+      rows: [
+        makeRow({ id: "b1" }),
+        makeRow({ id: "b2", date: "2026-02-09", amount_cents: 4899, source_col: 3 }),
+      ],
+    });
+
+    const sums = await t.db.select<{ transaction_id: number; total: number; n: number }>(
+      `SELECT transaction_id, SUM(amount_cents) AS total, COUNT(*) AS n
+       FROM splits GROUP BY transaction_id ORDER BY transaction_id`,
+    );
+    expect(sums).toHaveLength(2);
+    expect(sums.every((row) => row.total === 0 && row.n === 2)).toBe(true);
+
+    const payments = await t.repos.payments.list({ from: "2026-01-01", to: "2026-12-31" });
+    expect(payments).toHaveLength(2);
+    for (const payment of payments) {
+      const splits = await t.db.select<{ account_id: number; amount_cents: number }>(
+        "SELECT account_id, amount_cents FROM splits WHERE transaction_id = ? ORDER BY id",
+        [payment.id],
+      );
+      expect(splits).toEqual([
+        { account_id: payment.category_id, amount_cents: payment.amount_cents },
+        { account_id: payment.account_id, amount_cents: -payment.amount_cents },
+      ]);
+    }
+  });
+
+  it("never resolves a category name to a funding account or vice versa", async () => {
+    const funding = await t.repos.accounts.insert({ name: "Shared", kind: "checking" });
+    const category = await t.repos.categories.insert({ name: "Shared" });
+
+    // Category named like an existing funding account.
+    await commitReviewedImport(t.repos, {
+      source_file: "fixture.xlsx",
+      content_hash: "hash-same-name-1",
+      rows: [makeRow({ id: "s1", account_name: "Checking", category_name: "Shared" })],
+    });
+    // Funding account named like an existing category.
+    await commitReviewedImport(t.repos, {
+      source_file: "fixture.xlsx",
+      content_hash: "hash-same-name-2",
+      rows: [
+        makeRow({
+          id: "s2",
+          account_name: "Shared",
+          category_name: null,
+          date: "2026-02-02",
+          source_row: 3,
+        }),
+      ],
+    });
+
+    const payments = await t.repos.payments.list({ from: "2026-01-01", to: "2026-12-31" });
+    const first = payments.find((payment) => payment.date === "2026-01-08")!;
+    const second = payments.find((payment) => payment.date === "2026-02-02")!;
+    expect(first.category_id).toBe(category.id);
+    expect(first.account_id).not.toBe(funding.id);
+    expect(second.account_id).toBe(funding.id);
+    expect(second.category_id).toBeNull();
+    // No duplicate "Shared" account of either type was created.
+    expect(await tableCount("accounts WHERE name = 'Shared'")).toBe(2);
+  });
+
+  it("keeps a new category and a new funding account with the same name apart inside one batch", async () => {
+    await commitReviewedImport(t.repos, {
+      source_file: "fixture.xlsx",
+      content_hash: "hash-twin",
+      rows: [
+        makeRow({ id: "t1", account_name: "Twin", category_name: "Twin" }),
+        // Category created BEFORE the same-named funding account (and the
+        // reverse) so an unrestricted lowest-id lookup would pick the wrong one.
+        makeRow({ id: "t2", account_name: "Other", category_name: "Twin2", source_row: 3 }),
+        makeRow({ id: "t3", account_name: "Twin2", category_name: null, source_row: 4 }),
+      ],
+    });
+
+    const payments = await t.repos.payments.list({ from: "2026-01-01", to: "2026-12-31" });
+    const accounts = await t.repos.accounts.list();
+    const categories = await t.repos.categories.list();
+    const accountId = (name: string) => accounts.find((row) => row.name === name)!.id;
+    const categoryId = (name: string) => categories.find((row) => row.name === name)!.id;
+    expect(accounts.map((row) => row.name).sort()).toEqual(["Other", "Twin", "Twin2"]);
+    expect(categories.map((row) => row.name).sort()).toEqual(["Twin", "Twin2"]);
+    expect(payments.map((p) => [p.account_id, p.category_id])).toEqual([
+      [accountId("Twin"), categoryId("Twin")],
+      [accountId("Other"), categoryId("Twin2")],
+      [accountId("Twin2"), null],
+    ]);
+  });
+
+  it("creates pending funding accounts with the right type, subtype and parent", async () => {
+    const kinds = [
+      ["checking", "ASSET", "bank", "root_asset"],
+      ["cash", "ASSET", "cash", "root_asset"],
+      ["credit", "LIABILITY", "credit_card", "root_liability"],
+      ["savings", "ASSET", "savings", "root_asset"],
+      ["loan", "LIABILITY", "loan", "root_liability"],
+    ] as const;
+
+    const rows = kinds.map(([kind], index) =>
+      makeRow({
+        id: `k${index}`,
+        account_name: `Acct ${kind}`,
+        account_kind: kind,
+        category_name: null,
+        source_row: 10 + index,
+      }),
+    );
+    await commitReviewedImport(t.repos, {
+      source_file: "fixture.xlsx",
+      content_hash: "hash-kinds",
+      rows,
+    });
+
+    for (const [kind, type, subtype, rootRole] of kinds) {
+      const [row] = await t.db.select<{
+        type: string;
+        subtype: string | null;
+        placeholder: number;
+        parent_role: string | null;
+      }>(
+        `SELECT a.type AS type, a.subtype AS subtype, a.placeholder AS placeholder, p.system_role AS parent_role
+         FROM accounts a JOIN accounts p ON p.id = a.parent_id
+         WHERE a.name = ?`,
+        [`Acct ${kind}`],
+      );
+      expect(row).toEqual({ type, subtype, placeholder: 0, parent_role: rootRole });
+    }
+  });
+
+  it("creates a pending category as an EXPENSE account under the expense root", async () => {
+    await commitReviewedImport(t.repos, {
+      source_file: "fixture.xlsx",
+      content_hash: "hash-new-category",
+      rows: [makeRow()],
+    });
+    const [row] = await t.db.select<{ type: string; parent_role: string | null }>(
+      `SELECT a.type AS type, p.system_role AS parent_role
+       FROM accounts a JOIN accounts p ON p.id = a.parent_id WHERE a.name = 'utilities'`,
+    );
+    expect(row).toEqual({ type: "EXPENSE", parent_role: "root_expense" });
+  });
+
+  it("commits a $0.00 cell as a zero-amount transaction with two zero splits", async () => {
+    const result = await commitReviewedImport(t.repos, {
+      source_file: "fixture.xlsx",
+      content_hash: "hash-zero",
+      rows: [makeRow({ amount_cents: 0 })],
+    });
+    expect(result.inserted_count).toBe(1);
+
+    const rows = await t.db.select<{ amount_cents: number; kind: string }>(
+      `SELECT s.amount_cents AS amount_cents, typeof(s.amount_cents) AS kind
+       FROM splits s JOIN transactions t ON t.id = s.transaction_id WHERE t.source = 'xlsx'`,
+    );
+    expect(rows).toEqual([
+      { amount_cents: 0, kind: "integer" },
+      { amount_cents: 0, kind: "integer" },
+    ]);
+    const [txn] = await t.db.select<{ import_amount_cents: number }>(
+      "SELECT import_amount_cents FROM transactions",
+    );
+    expect(txn.import_amount_cents).toBe(0);
+  });
+
+  it("treats a cell whose transaction was edited into several splits as an exact duplicate", async () => {
+    await commitReviewedImport(t.repos, {
+      source_file: "fixture.xlsx",
+      content_hash: "hash-b23-1",
+      rows: [makeRow()],
+    });
+    // Edit the imported transaction into three splits through the ledger: it
+    // is no longer payment-shaped but keeps its xlsx identity snapshot.
+    const [txn] = await t.db.select<{ id: number; payee_id: number; account_id: number }>(
+      "SELECT id, payee_id, import_account_id AS account_id FROM transactions",
+    );
+    const [{ account_id: expenseId }] = await t.db.select<{ account_id: number }>(
+      `SELECT s.account_id AS account_id FROM splits s
+       JOIN accounts a ON a.id = s.account_id AND a.type = 'EXPENSE'
+       WHERE s.transaction_id = ?`,
+      [txn.id],
+    );
+    await updateTransaction(t.repos.ledger, txn.id, {
+      date: "2026-01-08",
+      payee_id: txn.payee_id,
+      splits: [
+        { account_id: expenseId, amount_cents: 3000 },
+        { account_id: expenseId, amount_cents: 1858 },
+        { account_id: txn.account_id, amount_cents: -4858 },
+      ],
+    });
+
+    const before = {
+      transactions: await tableCount("transactions"),
+      splits: await tableCount("splits"),
+      payees: await tableCount("payees"),
+      accounts: await tableCount("accounts"),
+      importLog: await tableCount("import_log"),
+    };
+    const annotated = await annotateImportRowsWithDedup(t.repos, [makeRow({ id: "again" })]);
+    expect(annotated[0].dedup).toEqual({ kind: "exact_duplicate" });
+
+    const result = await commitReviewedImport(t.repos, {
+      source_file: "fixture.xlsx",
+      content_hash: "hash-b23-2",
+      rows: annotated,
+    });
+    expect(result.inserted_count).toBe(0);
+    expect(result.skipped_exact_duplicates).toBe(1);
+    expect(await tableCount("transactions")).toBe(before.transactions);
+    expect(await tableCount("splits")).toBe(before.splits);
+    expect(await tableCount("payees")).toBe(before.payees);
+    expect(await tableCount("accounts")).toBe(before.accounts);
+    expect(await tableCount("import_log")).toBe(before.importLog + 1);
+  });
+
+  it("fails loudly with the original error as cause when two rows in one commit share a cell identity", async () => {
+    const before = {
+      transactions: await tableCount("transactions"),
+      splits: await tableCount("splits"),
+      payees: await tableCount("payees"),
+      accounts: await tableCount("accounts"),
+      importLog: await tableCount("import_log"),
+    };
+    let caught: unknown;
+    try {
+      await commitReviewedImport(t.repos, {
+        source_file: "fixture.xlsx",
+        content_hash: "hash-b23-dup",
+        rows: [makeRow({ id: "one" }), makeRow({ id: "two" })],
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    const error = caught as Error & { cause?: unknown };
+    expect(error.message).toMatch(/xlsx cell identity collides with an existing transaction/);
+    expect(error.message).toMatch(/No rows were imported/);
+    expect(error.cause).toBeInstanceOf(Error);
+    expect((error.cause as Error).message).toMatch(/UNIQUE constraint failed: transactions\./);
+    expect(await tableCount("transactions")).toBe(before.transactions);
+    expect(await tableCount("splits")).toBe(before.splits);
+    expect(await tableCount("payees")).toBe(before.payees);
+    expect(await tableCount("accounts")).toBe(before.accounts);
+    expect(await tableCount("import_log")).toBe(before.importLog);
   });
 
   it("reports per-stage progress: reading, annotating, building, committing, done", async () => {

@@ -48,12 +48,35 @@ orchestrator's Phase 5 Quality Checks.
 Run only the test files or test ids you just added or substantially rewrote:
 
 ```bash
-npx vitest run <test-file>                                # TypeScript
-cargo test <name> --manifest-path src-tauri/Cargo.toml    # Rust
+npx vitest run <test-file> / cargo test <name> --manifest-path src-tauri/Cargo.toml
 ```
 
 If you wrote no new tests (implementation-only change), skip rung 1 and say so, then
 run rung 2.
+
+Every guarding test needs a regression proof; see **## Regression proof** below.
+
+## Regression proof
+
+A **guarding test** is a test added or rewritten in the change that guards a **bug fix** or a **behavior change** the task makes. Every guarding test needs a regression proof; other new tests do not. The rule applies to any agent that adds a guarding test (test-writer or implementer).
+
+**Default (scratch copy):** Copy the working tree (without `.git`) into a private temporary directory outside the repository so relative paths and repo-root resolution still hold (the scratch copy is not part of any write fence and is removed afterwards). In the copy, apply the exact edit that re-breaks the behavior (revert the fix or inject the bug). Run the guarding test's rung-1 command there; confirm it FAILS and that only the target failed; then show the test PASSES on the real, unmodified tree.
+
+**In-place exception:** Allowed only when copying the tree is impractical (state why), only for files inside the agent's own **write fence**, and never while other members of its **ready group** are running (they share one checkout). Back up the file first, apply the edit, run, restore from the backup, and confirm the restore with a silent byte compare (`cmp`) before recording PASS.
+
+**Proof record** (per guarding test): test id; **injected edit** as an exact old→new substitution at **file:line** (or a unified diff); the command run; the exact **FAIL line**; evidence that only the target failed; the **PASS** line after restore; the **method** (scratch copy, or in place with the reason).
+
+**Vacuous proof:** A FAIL caused by something other than the injected behavior change (a crash, **unbound** variable, **syntax error**, missing file, wrong root) or a test that still passes under the edit is **vacuous** — **no proof**. A shell criterion that "passes on printing nothing" must append **`; echo rc=$?`** so an error exit cannot pass.
+
+**Proof-quality rules:**
+
+1. Mutate behavior (a branch, a value, an exit code); **never delete a definition** the code still references.
+2. No **equivalent mutation** (a change no test can observe, such as scaling both sides of a comparison); every `>=`/`>`/`<=`/`<` contract the test guards gets a case **exactly at the boundary**.
+3. Assert the **precondition** that makes a case meaningful (the input actually reaches the guarded path) before asserting the outcome.
+4. Pin ambient conditions the behavior depends on (**time zone**, locale, case sensitivity, clock) inside the test, and check the ambient value first — passing locally and in CI can mean both environments agree with the bug.
+5. Test at the **layer where the regression** would happen (for example the query, not the mapper that reshapes its result).
+6. Record the proof exactly as the proof record lists (**injected edit**, exact **FAIL line**, only-the-target-failed evidence, **PASS** after restore).
+7. Proofs are goal or task evidence, **never committed** suite cases, and never touch the real repository or generated/ignored files outside the in-place exception.
 
 ## Rung 2 — Impacted tests
 
@@ -69,8 +92,7 @@ this to the whole suite.
 | `src/report-*.ts`, `src/xlsx-reader.ts` | matching `tests/report-*.test.ts` |
 | `src-tauri/src/<module>.rs` | `cargo test <module> --manifest-path src-tauri/Cargo.toml` |
 
-All Vitest commands run from the repo root (`npx vitest run <file>`); Rust tests use
-`--manifest-path src-tauri/Cargo.toml` — no `cd` required for either stack.
+TypeScript: `npx vitest run <test-file>` from the repo root. Rust: `cargo test <name> --manifest-path src-tauri/Cargo.toml` from the repo root.
 
 ### Discover extras
 
@@ -82,13 +104,20 @@ rung 2 is empty (brand-new module), treat it as a no-op and say so.
 ## Rung 3 — Full suites (cycle end only)
 
 ```bash
-npm test                                           # full Vitest suite
-cargo test --manifest-path src-tauri/Cargo.toml    # full Rust suite
-npm run lint && npm run typecheck                  # cycle-end quality checks
+npm test && cargo test --manifest-path src-tauri/Cargo.toml
+```
+
+```bash
+npm test                                                       # full Vitest suite
+cargo test --manifest-path src-tauri/Cargo.toml                # full Rust suite
+npm run lint && npm run typecheck                              # cycle-end TS quality checks
+cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings  # cycle-end Rust lint (when src-tauri changed)
 ```
 
 Forbidden until rung 3: any bare full-suite invocation or pattern-less test run.
 A `-k <name>`-style selector is a rung 1/2 tool, not a substitute for rung 3.
+
+A rung-3 failure is classified by the orchestrator per ORCHESTRATION.md `### Quality Checks` (flaky, local-edits, pre-existing, introduced) before any fix.
 
 ## Failure handling
 
@@ -109,8 +138,9 @@ re-run everything immediately.
 | `test-writer` | 1 then 2. Rung 3 only when executing the goal's designated closer task (see the carve-out below). |
 | `evaluator` (via `task-criteria`) | Requires evidence of 1 then 2. Does **not** fail a task for skipping rung 3 (see the carve-out below for a closer task's mandated run). |
 | `feature` orchestrator (and ad-hoc main-session work) | After every task is PASS and the final audit is APPROVED: **spawn `terminal`** for rung 3 — the orchestrator's rung-3 authority (when it runs) is unchanged, only its execution is delegated. Never run rung 3 itself in this session. |
-| `terminal` | Executes any Bash or PowerShell command it is spawned with. No Edit/Write tools. Returns only the result the caller asked for (default: compact `{exit; excerpt; log path}`). Rung 3 is always a spawn of this agent. |
+| `terminal` | Runs the Bash or PowerShell command in its spawn prompt. No Edit/Write tools. Returns only the result the caller asked for (default: compact `{exit; excerpt; log path}`). Rung 3 is always a spawn of this agent. |
 | `qa-evaluator` | Behavioral evidence only. Does not replace the ladder. |
+| `evidence-collector` | None — gathers QA evidence only; never runs ladder rungs. |
 
 ## Closer-task carve-out (delegated rung 3)
 

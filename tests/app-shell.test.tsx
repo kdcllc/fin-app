@@ -4,13 +4,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { AppSettings } from "../src/settings";
-import type { Database, Repositories } from "../src/core";
+import type { Database, LedgerAccount, Repositories } from "../src/core";
 
 const revealItemInDirMock = vi.fn(async () => {});
 const reposStub: Repositories = {
   accounts: {} as Repositories["accounts"],
   categories: {} as Repositories["categories"],
   importLog: {} as Repositories["importLog"],
+  ledger: {
+    listAccounts: vi.fn(async () => []),
+    sumSplitsByAccount: vi.fn(async () => []),
+  } as unknown as Repositories["ledger"],
   payees: {
     list: vi.fn(async () => []),
   } as Repositories["payees"],
@@ -147,6 +151,100 @@ describe("app shell acceptance behavior", () => {
 
     await user.click(screen.getByRole("button", { name: "Import" }));
     await screen.findByRole("heading", { level: 1, name: "Import" });
+  });
+
+  it("navigates to the accounts page", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await screen.findByRole("heading", { level: 1, name: "Dashboard" });
+    const labels = screen.getAllByRole("navigation")[0].querySelectorAll("button");
+    expect(
+      Array.from(labels)
+        .map((b) => b.textContent)
+        .slice(0, 2),
+    ).toEqual(["Dashboard", "Accounts"]);
+
+    await user.click(screen.getByRole("button", { name: "Accounts" }));
+    await screen.findByRole("heading", { level: 1, name: "Accounts" });
+    expect(screen.getByText("Your account tree and balances.")).toBeTruthy();
+  });
+
+  it("lists Register right after Accounts and shows its page", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await screen.findByRole("heading", { level: 1, name: "Dashboard" });
+    const labels = screen.getAllByRole("navigation")[0].querySelectorAll("button");
+    expect(
+      Array.from(labels)
+        .map((b) => b.textContent)
+        .slice(0, 3),
+    ).toEqual(["Dashboard", "Accounts", "Register"]);
+
+    await user.click(screen.getByRole("button", { name: "Register" }));
+    await screen.findByRole("heading", { level: 1, name: "Register" });
+    expect(screen.getByText("Account register with running balance.")).toBeTruthy();
+  });
+
+  describe("Accounts to Register navigation", () => {
+    const ledgerStub = reposStub.ledger as unknown as Record<string, unknown>;
+    const account = (
+      patch: Partial<LedgerAccount> & { id: number; name: string },
+    ): LedgerAccount => ({
+      type: "ASSET",
+      subtype: null,
+      parent_id: null,
+      placeholder: false,
+      system_role: null,
+      last4: null,
+      gnucash_guid: null,
+      archived: false,
+      ...patch,
+    });
+    const assets = account({ id: 1, name: "Assets", placeholder: true, system_role: "root_asset" });
+    const checking = account({ id: 2, name: "Checking Z", parent_id: 1, subtype: "bank" });
+    const savings = account({ id: 3, name: "Savings Z", parent_id: 1, subtype: "savings" });
+    const originalList = ledgerStub.listAccounts;
+
+    beforeEach(() => {
+      const all = [assets, checking, savings];
+      ledgerStub.listAccounts = vi.fn(async () => all);
+      ledgerStub.getAccount = vi.fn(async (id: number) => all.find((a) => a.id === id) ?? null);
+      ledgerStub.listSplitsForAccount = vi.fn(async () => []);
+    });
+    afterEach(() => {
+      ledgerStub.listAccounts = originalList;
+      delete ledgerStub.getAccount;
+      delete ledgerStub.listSplitsForAccount;
+    });
+
+    async function openAccounts(user: ReturnType<typeof userEvent.setup>) {
+      render(<App />);
+      await screen.findByRole("heading", { level: 1, name: "Dashboard" });
+      await user.click(screen.getByRole("button", { name: "Accounts" }));
+      await screen.findByRole("heading", { level: 1, name: "Accounts" });
+    }
+
+    it("opens the clicked account's register with that account selected", async () => {
+      const user = userEvent.setup();
+      await openAccounts(user);
+
+      await user.click(await screen.findByRole("button", { name: "Savings Z" }));
+      await screen.findByRole("heading", { level: 1, name: "Register" });
+      const select = (await screen.findByLabelText("Register account")) as HTMLSelectElement;
+      await waitFor(() => expect(select.value).toBe("3"));
+    });
+
+    it("falls back to the first funding account when a placeholder row is clicked", async () => {
+      const user = userEvent.setup();
+      await openAccounts(user);
+
+      await user.click(await screen.findByRole("button", { name: "Assets" }));
+      await screen.findByRole("heading", { level: 1, name: "Register" });
+      const select = (await screen.findByLabelText("Register account")) as HTMLSelectElement;
+      await waitFor(() => expect(select.value).toBe("2"));
+    });
   });
 
   it("navigates to payments page", async () => {

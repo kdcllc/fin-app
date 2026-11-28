@@ -85,10 +85,13 @@ describe("rust-sqlite adapter seam", () => {
     const db = await openAdapter();
     const statements: BatchStatement[] = [
       { sql: "INSERT INTO payees (name) VALUES (?)", params: ["Water Co"] },
-      { sql: "INSERT INTO accounts (name, kind) VALUES (?, ?)", params: ["Checking", "checking"] },
       {
-        sql: "INSERT INTO payments (payee_id, account_id, date, amount_cents, source) VALUES (?, ?, ?, ?, ?)",
-        params: [1, 1, "2026-01-15", 4858, "xlsx"],
+        sql: "INSERT INTO accounts (name, type, subtype, parent_id) VALUES (?, 'ASSET', 'bank', 1)",
+        params: ["Checking"],
+      },
+      {
+        sql: "INSERT INTO import_log (source_file, content_hash, row_count) VALUES (?, ?, ?)",
+        params: ["fixture.xlsx", "hash-1", 4858],
       },
     ];
 
@@ -109,7 +112,7 @@ describe("rust-sqlite adapter seam", () => {
       invokeMock.mockRejectedValue("FOREIGN KEY constraint failed");
 
       const error = await db
-        .execute("INSERT INTO payments (payee_id) VALUES (999)")
+        .execute("INSERT INTO payees (name, default_account_id) VALUES ('x', 999)")
         .then(() => null, (e: unknown) => e);
       expect(error).toBeInstanceOf(ForeignKeyViolationError);
       expect((error as Error).message).toBe("FOREIGN KEY constraint failed");
@@ -130,14 +133,14 @@ describe("rust-sqlite adapter seam", () => {
 
     it("surfaces non-FK SQLite messages verbatim on select rejections", async () => {
       const db = await openAdapter();
-      invokeMock.mockRejectedValue("no such table: payments");
+      invokeMock.mockRejectedValue("no such table: import_log");
 
       const error = await db
-        .select("SELECT * FROM payments")
+        .select("SELECT * FROM import_log")
         .then(() => null, (e: unknown) => e);
       expect(error).toBeInstanceOf(Error);
       expect(error).not.toBeInstanceOf(ForeignKeyViolationError);
-      expect((error as Error).message).toBe("no such table: payments");
+      expect((error as Error).message).toBe("no such table: import_log");
     });
 
     it("retries a locked database and succeeds without surfacing the lock", async () => {

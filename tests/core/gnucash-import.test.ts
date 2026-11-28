@@ -6,6 +6,7 @@ import {
   type GnucashImportApproval,
   type GnucashImportOptions,
 } from "../../src/core/gnucash-import";
+import { postTransaction } from "../../src/core";
 import { normalizePayeeLabel } from "../../src/core/payee-normalization";
 import { openTestDb, type TestDb } from "../support/test-db";
 
@@ -351,7 +352,7 @@ describe("planGnucashImport", () => {
           { split_guid: "s2", account_guid: EXPENSE_GUID, memo: "", value_cents: 100 },
         ],
       });
-      const before = await tableCount("payments");
+      const before = await tableCount("transactions");
       const list = { transactions: [txn], errors: [] };
       await commitGnucashImport(t.db, t.repos, {
         approvedNewTxnGuids: [txn.txn_guid],
@@ -361,7 +362,7 @@ describe("planGnucashImport", () => {
         options: defaultOptions(),
         confirmedPayeeIds: { [txn.txn_guid]: payeeId },
       });
-      expect(await tableCount("payments")).toBe(before);
+      expect(await tableCount("transactions")).toBe(before);
     });
   });
 
@@ -380,7 +381,7 @@ describe("planGnucashImport", () => {
     });
 
     it("does not commit unreadable entries", async () => {
-      const before = await tableCount("payments");
+      const before = await tableCount("transactions");
       const list: GnucashTransactionList = {
         transactions: [],
         errors: [{ txn_guid: "bad", post_date: null, description: null, reason: "nope" }],
@@ -392,7 +393,7 @@ describe("planGnucashImport", () => {
         list,
         options: defaultOptions(),
       });
-      expect(await tableCount("payments")).toBe(before);
+      expect(await tableCount("transactions")).toBe(before);
     });
   });
 
@@ -429,7 +430,7 @@ describe("planGnucashImport", () => {
         options: defaultOptions(),
       });
       expect(await tableCount("payees")).toBe(before);
-      expect(await tableCount("payments")).toBe(0);
+      expect(await tableCount("transactions")).toBe(0);
     });
   });
 });
@@ -463,6 +464,15 @@ describe("commitGnucashImport", () => {
   async function tableCount(name: string): Promise<number> {
     const rows = await t.db.select<{ count: number }>(`SELECT COUNT(*) AS count FROM ${name}`);
     return rows[0].count;
+  }
+
+  /** Splits of one transaction as `[account_id, amount_cents]`, ordered by split id. */
+  async function splitsOf(transactionId: number): Promise<Array<[number, number]>> {
+    const rows = await t.db.select<{ account_id: number; amount_cents: number }>(
+      "SELECT account_id, amount_cents FROM splits WHERE transaction_id = ? ORDER BY id",
+      [transactionId],
+    );
+    return rows.map((row) => [row.account_id, row.amount_cents]);
   }
 
   it("requires list context on approval", async () => {
@@ -503,6 +513,11 @@ describe("commitGnucashImport", () => {
       source_col: null,
       occurrence_index: null,
     });
+    // Balanced two-split shape: expense +amount, funding -amount.
+    expect(await splitsOf(payment.id)).toEqual([
+      [categoryId, 4858],
+      [accountId, -4858],
+    ]);
   });
 
   it("links approved manual payments on merge", async () => {
@@ -560,6 +575,148 @@ describe("commitGnucashImport", () => {
     const after = await t.repos.payments.get(payment.id);
     expect(after?.amount_cents).toBe(9999);
     expect(after?.memo).toBe("Updated memo");
+    // Both splits follow the amount update and the transaction still balances.
+    expect(await splitsOf(payment.id)).toEqual([
+      [categoryId, 9999],
+      [accountId, -9999],
+    ]);
+  });
+
+  it("lists a GUID whose transaction was edited out of payment shape as unchanged and re-commits nothing", async () => {
+    const txn = makeTxn({ txn_guid: "txn-edited-then-reimported" });
+    const list = { transactions: [txn], errors: [] };
+    const approval = {
+      approvedNewTxnGuids: [txn.txn_guid],
+      approvedUpdateTxnGuids: [],
+      approvedMergeTxnGuids: [],
+      list,
+      options: defaultOptions(),
+      confirmedPayeeIds: { [txn.txn_guid]: payeeId },
+    };
+    await commitGnucashImport(t.db, t.repos, approval);
+    const [imported] = await t.repos.payments.list({ from: "2026-01-01", to: "2026-12-31" });
+
+    // Edit into three splits: no longer payment-shaped, still source gnucash.
+    await t.db.execute("UPDATE splits SET amount_cents = 3000 WHERE transaction_id = ? AND amount_cents = 4858", [imported.id]);
+    await t.db.execute("INSERT INTO splits (transaction_id, account_id, amount_cents) VALUES (?, ?, 1858)", [imported.id, categoryId]);
+    expect((await t.repos.payments.list({ from: "2026-01-01", to: "2026-12-31" })).length).toBe(0);
+
+    const plan = await planGnucashImport(t.repos, list, defaultOptions());
+    expect(plan.unchanged).toEqual([{ txnGuid: txn.txn_guid, paymentId: imported.id }]);
+    expect(plan.new).toEqual([]);
+    expect(plan.mergeCandidates).toEqual([]);
+
+    const txnsBefore = await tableCount("transactions");
+    const splitsBefore = await tableCount("splits");
+    await expect(commitGnucashImport(t.db, t.repos, approval)).resolves.toMatchObject({
+      inserted: 0,
+      merged: 0,
+    });
+    expect(await tableCount("transactions")).toBe(txnsBefore);
+    expect(await tableCount("splits")).toBe(splitsBefore);
+  });
+
+  it("plans a re-dated (out of window) GnuCash payment as updated, never new or merge, and does not duplicate it", async () => {
+    const txn = makeTxn({ txn_guid: "txn-redated", post_date: "2026-03-15" });
+    const list = { transactions: [txn], errors: [] };
+    const approval = {
+      approvedNewTxnGuids: [txn.txn_guid],
+      approvedUpdateTxnGuids: [],
+      approvedMergeTxnGuids: [],
+      list,
+      options: defaultOptions(),
+      confirmedPayeeIds: { [txn.txn_guid]: payeeId },
+    };
+    await commitGnucashImport(t.db, t.repos, approval);
+    const [imported] = await t.repos.payments.list({ from: "2026-01-01", to: "2026-12-31" });
+    // Re-date far outside the plan's +/-3 day window around 2026-03-15.
+    await t.repos.payments.update(imported.id, { date: "2026-09-01" });
+
+    const plan = await planGnucashImport(t.repos, list, defaultOptions());
+    expect(plan.new).toEqual([]);
+    expect(plan.mergeCandidates).toEqual([]);
+    expect(plan.updated).toEqual([
+      {
+        txnGuid: txn.txn_guid,
+        paymentId: imported.id,
+        diffs: [{ field: "date", existing: "2026-09-01", incoming: "2026-03-15" }],
+      },
+    ]);
+
+    await commitGnucashImport(t.db, t.repos, approval);
+    const refs = await t.db.select<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM transactions WHERE external_ref = ?",
+      [txn.txn_guid],
+    );
+    expect(refs[0].count).toBe(1);
+  });
+
+  describe("multi-match tie-break (payment-shaped wins, then lowest id)", () => {
+    const GUID = "txn-two-matches";
+
+    async function post(shaped: boolean, date: string): Promise<number> {
+      const splits = shaped
+        ? [
+            { account_id: categoryId, amount_cents: 4858 },
+            { account_id: accountId, amount_cents: -4858 },
+          ]
+        : [
+            { account_id: categoryId, amount_cents: 3000 },
+            { account_id: categoryId, amount_cents: 1858 },
+            { account_id: accountId, amount_cents: -4858 },
+          ];
+      const stored = await postTransaction(t.repos.ledger, {
+        date,
+        payee_id: payeeId,
+        memo: "Power Co",
+        source: "gnucash",
+        external_ref: GUID,
+        splits,
+      });
+      return stored.id;
+    }
+
+    it("prefers the lower-id payment-shaped transaction over a higher-id edited one", async () => {
+      const lower = await post(true, "2026-03-14");
+      const higher = await post(false, "2026-03-15");
+      expect(higher).toBeGreaterThan(lower);
+      const plan = await planGnucashImport(
+        t.repos,
+        { transactions: [makeTxn({ txn_guid: GUID, post_date: "2026-03-15" })], errors: [] },
+        defaultOptions(),
+      );
+      expect(plan.unchanged).toEqual([]);
+      expect(plan.new).toEqual([]);
+      expect(plan.mergeCandidates).toEqual([]);
+      expect(plan.updated).toEqual([
+        {
+          txnGuid: GUID,
+          paymentId: lower,
+          diffs: [{ field: "date", existing: "2026-03-14", incoming: "2026-03-15" }],
+        },
+      ]);
+    });
+
+    it("prefers a higher-id payment-shaped transaction over a lower-id edited one", async () => {
+      const lower = await post(false, "2026-03-15");
+      const higher = await post(true, "2026-03-14");
+      expect(higher).toBeGreaterThan(lower);
+      const plan = await planGnucashImport(
+        t.repos,
+        { transactions: [makeTxn({ txn_guid: GUID, post_date: "2026-03-15" })], errors: [] },
+        defaultOptions(),
+      );
+      expect(plan.unchanged).toEqual([]);
+      expect(plan.new).toEqual([]);
+      expect(plan.mergeCandidates).toEqual([]);
+      expect(plan.updated).toEqual([
+        {
+          txnGuid: GUID,
+          paymentId: higher,
+          diffs: [{ field: "date", existing: "2026-03-14", incoming: "2026-03-15" }],
+        },
+      ]);
+    });
   });
 
   it("reconciles skipped counts for partial approval", async () => {
@@ -609,7 +766,7 @@ describe("commitGnucashImport", () => {
       makeTxn({ txn_guid: "txn-rollback-2", post_date: "2026-09-02" }),
     ];
     const list = { transactions: txns, errors: [] };
-    const before = await tableCount("payments");
+    const before = await tableCount("transactions");
 
     await expect(
       commitGnucashImport(t.db, t.repos, {
@@ -623,7 +780,7 @@ describe("commitGnucashImport", () => {
       }),
     ).rejects.toThrow(/batch statement|injected failure/i);
 
-    expect(await tableCount("payments")).toBe(before);
+    expect(await tableCount("transactions")).toBe(before);
   });
 
   it("re-import is a no-op after successful commit", async () => {
@@ -645,7 +802,7 @@ describe("commitGnucashImport", () => {
     expect(secondPlan.mergeCandidates).toHaveLength(0);
     expect(secondPlan.unchanged).toHaveLength(1);
 
-    const before = await tableCount("payments");
+    const before = await tableCount("transactions");
     const secondCommit = await commitGnucashImport(t.db, t.repos, {
       approvedNewTxnGuids: [],
       approvedUpdateTxnGuids: [],
@@ -655,7 +812,7 @@ describe("commitGnucashImport", () => {
     });
     expect(secondCommit.inserted).toBe(0);
     expect(secondCommit.merged).toBe(0);
-    expect(await tableCount("payments")).toBe(before);
+    expect(await tableCount("transactions")).toBe(before);
   });
 
   it("round-trips $10,673.91 exactly", async () => {

@@ -23,11 +23,11 @@ function loadWorkbookFixture(fileName: string): RawWorkbookPayload {
 function reposWithInjectedCommitFailure(baseRepos: Repositories): Repositories {
   return {
     ...baseRepos,
-    // Poison the commit batch right after its first payment INSERT: the
+    // Poison the commit batch right after its first transaction INSERT: the
     // whole batch must roll back, leaving every table unchanged.
     batch(statements) {
       const firstPaymentInsert = statements.findIndex((statement) =>
-        statement.sql.trimStart().startsWith("INSERT INTO payments"),
+        statement.sql.trimStart().startsWith("INSERT INTO transactions"),
       );
       const poisoned = [...statements];
       poisoned.splice(firstPaymentInsert + 1, 0, {
@@ -110,8 +110,8 @@ describe("import review UI", () => {
     const countsBefore = {
       payees: await tableCount("payees"),
       accounts: await tableCount("accounts"),
-      categories: await tableCount("categories"),
-      payments: await tableCount("payments"),
+      categories: await tableCount("accounts WHERE type = 'EXPENSE' AND system_role IS NULL"),
+      payments: await tableCount("transactions"),
       importLog: await tableCount("import_log"),
     };
 
@@ -126,8 +126,10 @@ describe("import review UI", () => {
     await waitFor(async () => {
       expect(await tableCount("payees")).toBe(countsBefore.payees);
       expect(await tableCount("accounts")).toBe(countsBefore.accounts);
-      expect(await tableCount("categories")).toBe(countsBefore.categories);
-      expect(await tableCount("payments")).toBe(countsBefore.payments);
+      expect(await tableCount("accounts WHERE type = 'EXPENSE' AND system_role IS NULL")).toBe(
+        countsBefore.categories,
+      );
+      expect(await tableCount("transactions")).toBe(countsBefore.payments);
       expect(await tableCount("import_log")).toBe(countsBefore.importLog);
     });
 
@@ -144,8 +146,10 @@ describe("import review UI", () => {
     await waitFor(async () => {
       expect(await tableCount("payees")).toBe(countsBefore.payees);
       expect(await tableCount("accounts")).toBe(countsBefore.accounts);
-      expect(await tableCount("categories")).toBe(countsBefore.categories);
-      expect(await tableCount("payments")).toBe(countsBefore.payments);
+      expect(await tableCount("accounts WHERE type = 'EXPENSE' AND system_role IS NULL")).toBe(
+        countsBefore.categories,
+      );
+      expect(await tableCount("transactions")).toBe(countsBefore.payments);
       expect(await tableCount("import_log")).toBe(countsBefore.importLog);
     });
   });
@@ -255,8 +259,8 @@ describe("import review UI", () => {
     const countsBefore = {
       payees: await tableCount("payees"),
       accounts: await tableCount("accounts"),
-      categories: await tableCount("categories"),
-      payments: await tableCount("payments"),
+      categories: await tableCount("accounts WHERE type = 'EXPENSE' AND system_role IS NULL"),
+      payments: await tableCount("transactions"),
       importLog: await tableCount("import_log"),
     };
 
@@ -287,8 +291,10 @@ describe("import review UI", () => {
     await waitFor(async () => {
       expect(await tableCount("payees")).toBe(countsBefore.payees);
       expect(await tableCount("accounts")).toBe(countsBefore.accounts);
-      expect(await tableCount("categories")).toBe(countsBefore.categories);
-      expect(await tableCount("payments")).toBe(countsBefore.payments);
+      expect(await tableCount("accounts WHERE type = 'EXPENSE' AND system_role IS NULL")).toBe(
+        countsBefore.categories,
+      );
+      expect(await tableCount("transactions")).toBe(countsBefore.payments);
       expect(await tableCount("import_log")).toBe(countsBefore.importLog);
     });
   });

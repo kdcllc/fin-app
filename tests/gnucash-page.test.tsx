@@ -7,7 +7,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { GnucashTransactionList } from "../src/core/gnucash-types";
-import { recordExport } from "../src/core";
 import { GnuCashPage } from "../src/pages/GnuCashPage";
 import { openTestDb, type TestDb } from "./support/test-db";
 
@@ -26,7 +25,6 @@ const updateGnucashBookStateMock = vi.fn();
 const gnucashProbeBookMock = vi.fn();
 const gnucashListAccountsMock = vi.fn();
 const gnucashListTransactionsMock = vi.fn();
-const exportReportCsvMock = vi.fn();
 
 vi.mock("../src/gnucash-book", () => ({
   loadGnucashBookState: () => loadGnucashBookStateMock(),
@@ -39,10 +37,6 @@ vi.mock("../src/gnucash-book", () => ({
     from: string,
     to: string,
   ) => gnucashListTransactionsMock(path, accountGuids, from, to),
-}));
-
-vi.mock("../src/report-csv", () => ({
-  exportReportCsv: (path: string, content: string) => exportReportCsvMock(path, content),
 }));
 
 interface ReaderFixture {
@@ -80,7 +74,6 @@ describe("GnuCashPage", () => {
     gnucashProbeBookMock.mockReset();
     gnucashListAccountsMock.mockReset();
     gnucashListTransactionsMock.mockReset();
-    exportReportCsvMock.mockReset();
 
     loadGnucashBookStateMock.mockResolvedValue(linkedBookState());
     updateGnucashBookStateMock.mockImplementation(async (patch) => ({
@@ -90,7 +83,6 @@ describe("GnuCashPage", () => {
     gnucashProbeBookMock.mockResolvedValue(fixture.probe);
     gnucashListAccountsMock.mockResolvedValue(fixture.accounts);
     gnucashListTransactionsMock.mockResolvedValue(fixture.transactionList);
-    exportReportCsvMock.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -120,13 +112,18 @@ describe("GnuCashPage", () => {
     await clickTab(user, "Import");
     expect(screen.getByRole("button", { name: "Plan import" })).toBeTruthy();
 
-    await clickTab(user, "Export");
-    expect(screen.getByText("Export fin-app payments to QIF or CSV for GnuCash.")).toBeTruthy();
+  });
 
-    await clickTab(user, "Reconcile");
-    expect(
-      screen.getByText("Compare fin-app payments with GnuCash transactions for a mapped account."),
-    ).toBeTruthy();
+  it("renders exactly the Link book, Account mapping and Import tabs", async () => {
+    await renderPage();
+
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      "Link book",
+      "Account mapping",
+      "Import",
+    ]);
+    expect(screen.queryByRole("tab", { name: "Export" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "Reconcile" })).toBeNull();
   });
 
   it("shows XML conversion walkthrough without persisting the XML path", async () => {
@@ -151,7 +148,7 @@ describe("GnuCashPage", () => {
     );
   });
 
-  it("blocks mapping/import/export/reconcile when the linked book is missing", async () => {
+  it("blocks mapping/import when the linked book is missing", async () => {
     const user = userEvent.setup();
 
     loadGnucashBookStateMock.mockResolvedValue({
@@ -385,8 +382,8 @@ describe("GnuCashPage", () => {
     expect(screen.getByText(/Confirm or select a payee for 1 new row/i)).toBeTruthy();
 
     const beforePayees = await t.db.select<{ count: number }>("SELECT COUNT(*) AS count FROM payees");
-    const beforePayments = await t.db.select<{ count: number }>(
-      "SELECT COUNT(*) AS count FROM payments",
+    const beforeTransactions = await t.db.select<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM transactions",
     );
 
     await user.click(screen.getByRole("button", { name: "Create payee" }));
@@ -400,14 +397,20 @@ describe("GnuCashPage", () => {
     await user.click(commitButton());
     await screen.findByText(/Import complete:/);
 
-    expect(await t.db.select<{ count: number }>("SELECT COUNT(*) AS count FROM payments")).toEqual([
-      { count: beforePayments[0].count + 1 },
-    ]);
+    expect(
+      await t.db.select<{ count: number }>("SELECT COUNT(*) AS count FROM transactions"),
+    ).toEqual([{ count: beforeTransactions[0].count + 1 }]);
     expect(
       await t.db.select<{ external_ref: string; amount_cents: number }>(
-        "SELECT external_ref, amount_cents FROM payments WHERE external_ref = 'payee-new-txn'",
+        `SELECT t.external_ref AS external_ref, s.amount_cents AS amount_cents
+           FROM transactions t JOIN splits s ON s.transaction_id = t.id
+          WHERE t.external_ref = 'payee-new-txn'
+          ORDER BY s.amount_cents`,
       ),
-    ).toEqual([{ external_ref: "payee-new-txn", amount_cents: 500 }]);
+    ).toEqual([
+      { external_ref: "payee-new-txn", amount_cents: -500 },
+      { external_ref: "payee-new-txn", amount_cents: 500 },
+    ]);
   });
 
   it("requires payee auto-create confirmation before commit succeeds", async () => {
@@ -463,175 +466,59 @@ describe("GnuCashPage", () => {
     expect(commitButton.disabled).toBe(false);
     await user.click(commitButton);
     await screen.findByText(/Import complete:/);
-    expect(await t.db.select<{ count: number }>("SELECT COUNT(*) AS count FROM payments")).toEqual([
-      { count: 0 },
+    expect(
+      await t.db.select<{ count: number }>("SELECT COUNT(*) AS count FROM transactions"),
+    ).toEqual([{ count: 0 }]);
+  });
+
+  it("lists eligible accounts nested under ROOT and placeholder parents on a real-book-shaped tree", async () => {
+    const user = userEvent.setup();
+    const acct = (
+      guid: string,
+      name: string,
+      account_type: string,
+      parent_guid: string | null,
+      full_path: string,
+      placeholder = false,
+    ) => ({
+      guid,
+      name,
+      account_type,
+      parent_guid,
+      placeholder,
+      commodity_mnemonic: "USD",
+      commodity_fraction: 100,
+      full_path,
+    });
+    gnucashListAccountsMock.mockResolvedValue([
+      acct("r00", "Root Account", "ROOT", null, "Root Account", true),
+      acct("r01", "Assets", "ASSET", "r00", "Assets", true),
+      acct("r02", "Liabilities", "LIABILITY", "r00", "Liabilities", true),
+      acct("r03", "Checking", "BANK", "r01", "Assets:Checking"),
+      acct("r04", "Visa", "CREDIT", "r02", "Liabilities:Visa"),
+      acct("r05", "Checking Sub", "BANK", "r03", "Assets:Checking:Checking Sub"),
     ]);
-  });
-
-  it("blocks export when payments have mapping blockers", async () => {
-    const user = userEvent.setup();
-    const accountId = (
-      await t.repos.accounts.insert({
-        name: "Checking",
-        kind: "checking",
-        gnucash_guid: CHECKING_GUID,
-      })
-    ).id;
-    const payeeId = (await t.repos.payees.insert({ name: "Vendor" })).id;
-    const unmappedCategoryId = (await t.repos.categories.insert({ name: "Unmapped" })).id;
-
-    await t.repos.payments.insert({
-      payee_id: payeeId,
-      account_id: accountId,
-      category_id: unmappedCategoryId,
-      date: "2026-02-01",
-      amount_cents: 1200,
-      source: "manual",
-    });
+    loadGnucashBookStateMock.mockResolvedValue(linkedBookState([]));
 
     await renderPage();
-    await clickTab(user, "Export");
-    await user.click(screen.getByRole("button", { name: "Load payments" }));
+    await clickTab(user, "Import");
 
-    await screen.findByRole("heading", { name: "Mapping blockers" });
-    expect((screen.getByRole("button", { name: "Export" }) as HTMLButtonElement).disabled).toBe(
-      true,
-    );
-    expect(exportReportCsvMock).not.toHaveBeenCalled();
-  });
+    const checking = await screen.findByRole("checkbox", { name: "Assets:Checking" });
+    const sub = screen.getByRole("checkbox", { name: "Assets:Checking:Checking Sub" });
+    const visa = screen.getByRole("checkbox", { name: "Liabilities:Visa" });
+    const checkingNode = checking.closest("div") as HTMLElement;
+    expect(checkingNode.contains(sub)).toBe(true);
+    expect(checkingNode.contains(visa)).toBe(false);
 
-  it("excludes previously exported payments until the include checkbox is toggled", async () => {
-    const user = userEvent.setup();
-    const accountId = (
-      await t.repos.accounts.insert({
-        name: "Checking",
-        kind: "checking",
-        gnucash_guid: CHECKING_GUID,
-      })
-    ).id;
-    const categoryId = (
-      await t.repos.categories.insert({ name: "Electric", gnucash_guid: ELECTRIC_GUID })
-    ).id;
-    const payeeId = (await t.repos.payees.insert({ name: "Vendor" })).id;
+    expect(screen.getAllByRole("checkbox")).toHaveLength(3);
+    expect(screen.queryByRole("checkbox", { name: /^Root Account$/ })).toBeNull();
+    expect(screen.queryByRole("checkbox", { name: /^Assets$/ })).toBeNull();
+    expect(screen.queryByRole("checkbox", { name: /^Liabilities$/ })).toBeNull();
+    expect(screen.queryByText("No eligible GnuCash accounts loaded.")).toBeNull();
 
-    const payment = await t.repos.payments.insert({
-      payee_id: payeeId,
-      account_id: accountId,
-      category_id: categoryId,
-      date: "2026-02-10",
-      amount_cents: 5200,
-      memo: "Already exported",
-      source: "gnucash",
-      external_ref: "t00000000000000000000000000000009",
-    });
-    await recordExport(t.db, [payment.id], "csv");
-
-    await renderPage();
-    await clickTab(user, "Export");
-    await user.click(screen.getByRole("button", { name: "Load payments" }));
-
-    await waitFor(() => {
-      expect(screen.queryByText("Already exported")).toBeNull();
-    });
-
-    await user.click(screen.getByLabelText("Include previously exported payments"));
-    await user.click(screen.getByRole("button", { name: "Load payments" }));
-
-    await screen.findByText("Already exported");
-  });
-
-  it("persists manual reconcile matches and shows reader errors separately", async () => {
-    const user = userEvent.setup();
-    const account = await t.repos.accounts.insert({
-      name: "Checking",
-      kind: "checking",
-      gnucash_guid: CHECKING_GUID,
-    });
-    const categoryId = (
-      await t.repos.categories.insert({ name: "Electric", gnucash_guid: ELECTRIC_GUID })
-    ).id;
-    const payeeId = (await t.repos.payees.insert({ name: "Vendor" })).id;
-
-    const finOnly = await t.repos.payments.insert({
-      payee_id: payeeId,
-      account_id: account.id,
-      category_id: categoryId,
-      date: "2026-02-01",
-      amount_cents: 1234,
-      memo: "Fin only",
-      source: "manual",
-    });
-
-    const reconcileList: GnucashTransactionList = {
-      transactions: [
-        {
-          txn_guid: "gc-only-txn",
-          post_date: "2026-02-02",
-          description: "GnuCash only",
-          splits: [
-            {
-              split_guid: "s-gc-fund",
-              account_guid: CHECKING_GUID,
-              memo: "",
-              value_cents: -5678,
-            },
-            {
-              split_guid: "s-gc-exp",
-              account_guid: ELECTRIC_GUID,
-              memo: "",
-              value_cents: 5678,
-            },
-          ],
-        },
-      ],
-      errors: [
-        {
-          txn_guid: INEXACT_GUID,
-          post_date: "2026-02-20",
-          description: "Inexact rational txn",
-          reason: "inexact rational: -1/3 cannot be represented at fraction 100",
-        },
-      ],
-    };
-
-    gnucashListTransactionsMock.mockResolvedValue(reconcileList);
-
-    await renderPage();
-    await clickTab(user, "Reconcile");
-
-    await user.selectOptions(screen.getByLabelText("Reconcile account"), String(account.id));
-    await user.clear(screen.getByLabelText("Reconcile from date"));
-    await user.type(screen.getByLabelText("Reconcile from date"), "2026-01-01");
-    await user.clear(screen.getByLabelText("Reconcile to date"));
-    await user.type(screen.getByLabelText("Reconcile to date"), "2026-02-28");
-    await user.click(screen.getByRole("button", { name: "Run reconcile" }));
-
-    await screen.findByRole("heading", { name: "Reader errors" });
-    expect(screen.getByText(new RegExp(INEXACT_GUID))).toBeTruthy();
-    expect(screen.getByText(/inexact rational/i)).toBeTruthy();
-    expect(screen.getByRole("heading", { name: /^Fin-app only \(1\)$/ })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: /^GnuCash only \(1\)$/ })).toBeTruthy();
-
-    await user.selectOptions(
-      screen.getByLabelText("Manual match payment"),
-      `#${finOnly.id} 2026-02-01 $12.34`,
-    );
-    await user.selectOptions(
-      screen.getByLabelText("Manual match transaction"),
-      "gc-only-txn 2026-02-02",
-    );
-    await user.click(screen.getByRole("button", { name: "Match selected" }));
-
-    await screen.findByRole("heading", { name: /^Matched \(1\)$/ });
-    const matches = await t.db.select<{ payment_id: number; txn_guid: string; status: string }>(
-      "SELECT payment_id, txn_guid, status FROM gnucash_matches",
-    );
-    expect(matches).toEqual([
-      { payment_id: finOnly.id, txn_guid: "gc-only-txn", status: "matched" },
-    ]);
-
-    await user.click(screen.getByRole("button", { name: "Run reconcile" }));
-    await screen.findByRole("heading", { name: /^Matched \(1\)$/ });
-    expect(screen.queryByRole("heading", { name: /^Fin-app only \(1\)$/ })).toBeNull();
+    const plan = screen.getByRole("button", { name: "Plan import" }) as HTMLButtonElement;
+    expect(plan.disabled).toBe(true);
+    await user.click(checking);
+    expect(plan.disabled).toBe(false);
   });
 });

@@ -15,6 +15,9 @@ import { openTestDb, type TestDb } from "../support/test-db";
 function finAccount(overrides: Partial<Account> & Pick<Account, "id" | "name">): Account {
   return {
     kind: "checking",
+    type: "ASSET",
+    subtype: "bank",
+    parent_id: null,
     last4: null,
     gnucash_guid: null,
     archived: false,

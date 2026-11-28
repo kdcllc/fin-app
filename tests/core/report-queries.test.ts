@@ -8,6 +8,10 @@ import {
   formatReportCsv,
   formatYearSheetCsv,
   getBillPayGridForYear,
+  createIncome,
+  createTransfer,
+  postTransaction,
+  setOpeningBalance,
   listPaymentsForReport,
   runReportQuery,
   trailing12Window,
@@ -412,6 +416,122 @@ describe("report query engine fixture book", () => {
     );
   });
 
+  it("three-split expense, transfer and income change no report output", async () => {
+    const dims = [
+      { dimension: "category" as const, grain: "all" as const },
+      { dimension: "payee" as const, grain: "all" as const },
+      { dimension: "account" as const, grain: "all" as const },
+      { dimension: "total" as const, grain: "month" as const },
+      { dimension: "total" as const, grain: "year" as const },
+    ];
+    const snapshot = async () => ({
+      rows: await Promise.all(
+        dims.map((d) =>
+          runReportQuery(t.repos, { dimension: d.dimension, grain: d.grain, filter: FIXTURE_WINDOW }),
+        ),
+      ),
+      list: await listPaymentsForReport(t.repos, FIXTURE_WINDOW),
+      window: await allTimeWindow(t.repos),
+    });
+    const before = await snapshot();
+
+    const ledger = t.repos.ledger;
+    const expenseRoot = await ledger.getSystemAccount("root_expense");
+    const incomeRoot = await ledger.getSystemAccount("root_income");
+    const extra = await ledger.insertAccount({
+      name: "Extra Expense",
+      type: "EXPENSE",
+      parent_id: expenseRoot!.id,
+    });
+    const salary = await ledger.insertAccount({
+      name: "Salary",
+      type: "INCOME",
+      parent_id: incomeRoot!.id,
+    });
+    await postTransaction(ledger, {
+      date: "2026-01-20",
+      payee_id: powerCoId,
+      splits: [
+        { account_id: utilitiesId, amount_cents: 500 },
+        { account_id: extra.id, amount_cents: 700 },
+        { account_id: checkingId, amount_cents: -1_200 },
+      ],
+    });
+    // Out-of-window dates must not move allTimeWindow either.
+    await postTransaction(ledger, {
+      date: "1999-01-01",
+      payee_id: powerCoId,
+      splits: [
+        { account_id: extra.id, amount_cents: 100 },
+        { account_id: visaId, amount_cents: -50 },
+        { account_id: checkingId, amount_cents: -50 },
+      ],
+    });
+    await createTransfer(ledger, {
+      date: "2026-01-21",
+      fromAccountId: checkingId,
+      toAccountId: visaId,
+      amount_cents: 9_900,
+      payee_id: powerCoId,
+    });
+    await createIncome(ledger, {
+      date: "2030-01-22",
+      incomeAccountId: salary.id,
+      depositAccountId: checkingId,
+      amount_cents: 300_000,
+      payee_id: powerCoId,
+    });
+
+    // Two-split shapes that fail one guard each: EXPENSE<->EXPENSE funding,
+    // NULL payee, and EXPENSE<->INCOME funding.
+    await postTransaction(ledger, {
+      date: "2026-01-22",
+      payee_id: powerCoId,
+      splits: [
+        { account_id: utilitiesId, amount_cents: 400 },
+        { account_id: extra.id, amount_cents: -400 },
+      ],
+    });
+    await postTransaction(ledger, {
+      date: "2026-01-23",
+      payee_id: null,
+      splits: [
+        { account_id: utilitiesId, amount_cents: 800 },
+        { account_id: checkingId, amount_cents: -800 },
+      ],
+    });
+    await postTransaction(ledger, {
+      date: "2026-01-24",
+      payee_id: powerCoId,
+      splits: [
+        { account_id: utilitiesId, amount_cents: 600 },
+        { account_id: salary.id, amount_cents: -600 },
+      ],
+    });
+    await setOpeningBalance(ledger, checkingId, "1998-06-01", 50_000);
+
+    expect(await snapshot()).toEqual(before);
+  });
+
+  it("labels the uncategorized system account 'Uncategorized' even when renamed", async () => {
+    const uncategorized = await t.repos.ledger.getSystemAccount("uncategorized");
+    await t.repos.ledger.updateAccount(uncategorized!.id, { name: "Misc Renamed" });
+
+    const rows = await runReportQuery(t.repos, {
+      dimension: "category",
+      grain: "all",
+      filter: FIXTURE_WINDOW,
+    });
+    const row = rows.find((r) => r.groupKey === null);
+    expect(row).toMatchObject({
+      groupKey: null,
+      groupLabel: "Uncategorized",
+      total_cents: FIXTURE_BY_CATEGORY.uncategorized,
+    });
+    const dump = await listPaymentsForReport(t.repos, { ...FIXTURE_WINDOW, categoryId: null });
+    expect(dump[0].category_name).toBe("Uncategorized");
+  });
+
   it("includes archived payees and categories when they have in-window payments", async () => {
     await t.repos.payees.archive(waterCoId);
     await t.repos.categories.archive(groceriesId);
@@ -536,7 +656,7 @@ describe("report query performance guard", () => {
       }
     }
 
-    const [{ n }] = await t.db.select<{ n: number }>("SELECT COUNT(*) AS n FROM payments");
+    const [{ n }] = await t.db.select<{ n: number }>("SELECT COUNT(*) AS n FROM transactions t WHERE t.payee_id IS NOT NULL AND (SELECT COUNT(*) FROM splits s WHERE s.transaction_id = t.id) = 2");
     expect(n).toBe(3_000);
 
     const filter = { from: "2021-01-01", to: "2025-12-31" };

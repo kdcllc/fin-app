@@ -59,6 +59,10 @@ pub(crate) const MIGRATIONS: &[(i64, &str)] = &[
         8,
         include_str!("../migrations/0008_gnucash_integration.sql"),
     ),
+    (
+        9,
+        include_str!("../migrations/0009_double_entry_ledger.sql"),
+    ),
 ];
 
 /// Typed errors for the SQLite backend. Serialized as their `Display` string
@@ -516,23 +520,79 @@ fn assert_not_legacy_book(conn: &Connection, path: &Path) -> Result<(), BackendE
     Ok(())
 }
 
-/// Apply every migration whose version is greater than the file's current
-/// `PRAGMA user_version`, each in its own transaction, setting
+/// Apply every shipped migration whose version is greater than the file's
+/// current `PRAGMA user_version`. See [`apply_migrations`].
+fn run_migrations(conn: &mut Connection) -> Result<(), BackendError> {
+    apply_migrations(conn, MIGRATIONS)
+}
+
+/// Apply every migration in `migrations` whose version is greater than the
+/// file's current `PRAGMA user_version`, each in its own transaction, setting
 /// `user_version = N` after each. Re-running on a fully migrated file is a
 /// no-op.
-fn run_migrations(conn: &mut Connection) -> Result<(), BackendError> {
+///
+/// Foreign keys are switched OFF (outside any transaction — the pragma is a
+/// no-op inside one) so migrations can rebuild tables, and each migration must
+/// pass `PRAGMA foreign_key_check` before its transaction commits; any
+/// violation rolls that migration back. Foreign keys are restored ON on every
+/// exit path.
+fn apply_migrations(conn: &mut Connection, migrations: &[(i64, &str)]) -> Result<(), BackendError> {
     let current = user_version(conn)?;
-    for (version, sql) in MIGRATIONS {
+    if migrations.iter().all(|(version, _)| *version <= current) {
+        return Ok(());
+    }
+    conn.pragma_update(None, "foreign_keys", "OFF")?;
+    let applied = apply_pending_migrations(conn, migrations, current);
+    let restored = conn.pragma_update(None, "foreign_keys", "ON");
+    applied?;
+    restored?;
+    Ok(())
+}
+
+fn apply_pending_migrations(
+    conn: &mut Connection,
+    migrations: &[(i64, &str)],
+    current: i64,
+) -> Result<(), BackendError> {
+    for (version, sql) in migrations {
         if *version <= current {
             continue;
         }
         let tx = conn.transaction()?;
         tx.execute_batch(sql)
             .map_err(|e| BackendError::Sqlite(format!("migration {version} failed: {e}")))?;
+        let violations = foreign_key_violations(&tx)?;
+        if !violations.is_empty() {
+            // Returning drops `tx`, which rolls the migration back.
+            return Err(BackendError::Sqlite(format!(
+                "migration {version} left foreign key violations: {}",
+                violations.join(", ")
+            )));
+        }
         tx.pragma_update(None, "user_version", version)?;
         tx.commit()?;
     }
     Ok(())
+}
+
+/// Rows reported by `PRAGMA foreign_key_check`, as `table(rowid)->parent`
+/// (at most 10, enough to name the culprit).
+fn foreign_key_violations(conn: &Connection) -> Result<Vec<String>, BackendError> {
+    let mut stmt = conn.prepare("PRAGMA foreign_key_check")?;
+    let rows = stmt.query_map([], |row| {
+        let table: String = row.get(0)?;
+        let rowid: Option<i64> = row.get(1)?;
+        let parent: String = row.get(2)?;
+        Ok(format!(
+            "{table}({})->{parent}",
+            rowid.map_or_else(|| "?".to_string(), |id| id.to_string())
+        ))
+    })?;
+    let mut out = Vec::new();
+    for row in rows.take(10) {
+        out.push(row?);
+    }
+    Ok(out)
 }
 
 /// Map one JSON parameter to a SQLite value. Only null/integer/real/text/bool
@@ -663,18 +723,21 @@ mod tests {
     /// The `user_version` a fully migrated book reports.
     const LATEST_VERSION: i64 = MIGRATIONS[MIGRATIONS.len() - 1].0;
 
-    /// Tables after all shipped migrations (0001–0008).
+    /// Tables after all shipped migrations (0001–0009).
     const EXPECTED_TABLES: &[&str] = &[
         "accounts",
-        "categories",
-        "gnucash_matches",
         "import_log",
+        "legacy_category_map",
         "payees",
-        "payment_exports",
-        "payments",
         "recurring_bill_suggestion_dismissals",
         "recurring_bills",
+        "splits",
+        "transactions",
     ];
+
+    /// Insert a funding account under the seeded asset root (id 1 on a fresh book).
+    const CHECKING_ACCOUNT_INSERT: &str = "INSERT INTO accounts (name, type, subtype, parent_id)
+         VALUES (?, 'ASSET', 'bank', (SELECT id FROM accounts WHERE system_role = 'root_asset'))";
 
     struct TempBook {
         root: PathBuf,
@@ -766,11 +829,11 @@ mod tests {
             LATEST_VERSION,
             "fresh book should be migrated to the latest user_version"
         );
-        assert_eq!(LATEST_VERSION, 8, "latest migration should be version 8");
+        assert_eq!(LATEST_VERSION, 9, "latest migration should be version 9");
         assert_eq!(table_names(&conn), EXPECTED_TABLES);
         assert!(
-            index_names(&conn).contains(&"idx_payments_account_id".to_string()),
-            "payments.account_id index should exist after migration 7"
+            index_names(&conn).contains(&"idx_splits_account_id".to_string()),
+            "splits.account_id index should exist after migration 9"
         );
     }
 
@@ -1008,18 +1071,11 @@ mod tests {
         let err = with_conn(&state, |conn| {
             execute_impl(
                 conn,
-                "INSERT INTO payments (payee_id, account_id, date, amount_cents, source)
-                 VALUES (?, ?, ?, ?, ?)",
-                &[
-                    json!(999),
-                    json!(999),
-                    json!("2026-01-01"),
-                    json!(1250),
-                    json!("manual"),
-                ],
+                "INSERT INTO payees (name, default_account_id) VALUES (?, ?)",
+                &[json!("Ghost Co"), json!(999)],
             )
         })
-        .expect_err("dangling payee_id/account_id must violate FK constraints");
+        .expect_err("dangling default_account_id must violate FK constraints");
         assert!(
             err.to_string().contains("FOREIGN KEY constraint failed"),
             "TS mapSqliteError matches on the canonical text; got: {err}"
@@ -1047,30 +1103,25 @@ mod tests {
                 params: vec![json!("Water Co")],
             },
             BatchStatement {
-                sql: "INSERT INTO accounts (name, kind) VALUES (?, ?)".into(),
-                params: vec![json!("Checking"), json!("checking")],
+                sql: CHECKING_ACCOUNT_INSERT.into(),
+                params: vec![json!("Checking")],
             },
             BatchStatement {
-                sql: "INSERT INTO payments (payee_id, account_id, date, amount_cents, source)
-                      VALUES (?, ?, ?, ?, ?)"
+                sql: "INSERT INTO import_log (source_file, content_hash, row_count)
+                      VALUES (?, ?, ?)"
                     .into(),
-                params: vec![
-                    json!(1),
-                    json!(1),
-                    json!("2026-01-15"),
-                    json!(9999),
-                    json!("manual"),
-                ],
+                params: vec![json!("fixture.xlsx"), json!("hash-1"), json!(9999)],
             },
         ];
+        let accounts_before = count(&state, "accounts");
         let results = with_conn(&state, |conn| batch_impl(conn, &statements)).unwrap();
 
         assert_eq!(results.len(), 3);
         assert!(results.iter().all(|r| r.rows_affected == 1));
         assert_eq!(results[0].last_insert_id, 1);
         assert_eq!(count(&state, "payees"), 1);
-        assert_eq!(count(&state, "accounts"), 1);
-        assert_eq!(count(&state, "payments"), 1);
+        assert_eq!(count(&state, "accounts"), accounts_before + 1);
+        assert_eq!(count(&state, "import_log"), 1);
     }
 
     #[test]
@@ -1087,16 +1138,8 @@ mod tests {
             payee_insert("Power Co"),
             // Statement 3 of 5 (index 2): dangling FK — must fail.
             BatchStatement {
-                sql: "INSERT INTO payments (payee_id, account_id, date, amount_cents, source)
-                      VALUES (?, ?, ?, ?, ?)"
-                    .into(),
-                params: vec![
-                    json!(999),
-                    json!(999),
-                    json!("2026-01-01"),
-                    json!(500),
-                    json!("manual"),
-                ],
+                sql: "INSERT INTO payees (name, default_account_id) VALUES (?, ?)".into(),
+                params: vec![json!("Ghost Co"), json!(999)],
             },
             payee_insert("Gas Co"),
             payee_insert("Trash Co"),
@@ -1120,7 +1163,7 @@ mod tests {
             0,
             "rollback must undo statements 1-2"
         );
-        assert_eq!(count(&state, "payments"), 0);
+        assert_eq!(count(&state, "import_log"), 0);
     }
 
     #[test]
@@ -1284,21 +1327,19 @@ mod tests {
                     params: vec![json!("Water Co")],
                 },
                 BatchStatement {
-                    sql: "INSERT INTO accounts (name, kind) VALUES (?, ?)".into(),
-                    params: vec![json!("Checking"), json!("checking")],
+                    sql: CHECKING_ACCOUNT_INSERT.into(),
+                    params: vec![json!("Checking")],
                 },
                 BatchStatement {
-                    sql: "INSERT INTO payments (payee_id, account_id, date, amount_cents, source)
-                          VALUES (?, ?, ?, ?, ?)"
+                    sql: "INSERT INTO transactions (date, payee_id, source) VALUES (?, ?, ?)"
                         .into(),
-                    params: vec![
-                        json!(1),
-                        json!(1),
-                        json!("2026-01-15"),
-                        // $10,673.91 from the real workbook format, as cents.
-                        json!(1_067_391),
-                        json!("manual"),
-                    ],
+                    params: vec![json!("2026-01-15"), json!(1), json!("manual")],
+                },
+                BatchStatement {
+                    sql: "INSERT INTO splits (transaction_id, account_id, amount_cents)
+                          VALUES (1, (SELECT id FROM accounts WHERE name = ?), ?)"
+                        .into(),
+                    params: vec![json!("Checking"), json!(1_067_391)],
                 },
             ];
             with_conn(&state, |conn| batch_impl(conn, &statements)).unwrap();
@@ -1307,10 +1348,11 @@ mod tests {
 
         let state = open_session(&book.path_str());
         assert_eq!(count(&state, "payees"), 1);
-        assert_eq!(count(&state, "accounts"), 1);
-        assert_eq!(count(&state, "payments"), 1);
+        assert_eq!(count(&state, "accounts"), 8, "7 seeded system accounts + Checking");
+        assert_eq!(count(&state, "transactions"), 1);
+        assert_eq!(count(&state, "splits"), 1);
         let rows = with_conn(&state, |conn| {
-            select_impl(conn, "SELECT amount_cents FROM payments", &[])
+            select_impl(conn, "SELECT amount_cents FROM splits", &[])
         })
         .unwrap();
         assert_eq!(
@@ -1362,5 +1404,111 @@ mod tests {
             rows_before, rows_after,
             "content must be unchanged after rollback"
         );
+    }
+
+    // -- migration 0009 and the FK-safe runner ------------------------------
+
+    /// Build a book at `user_version = 8` holding legacy payments, nested
+    /// categories and a payee default — as an older app version left it.
+    fn build_v8_book(path: &Path) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let conn = Connection::open(path).unwrap();
+        for (version, sql) in MIGRATIONS.iter().filter(|(v, _)| *v <= 8) {
+            conn.execute_batch(sql).unwrap();
+            conn.pragma_update(None, "user_version", version).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO accounts (id, name, kind, last4) VALUES (1, 'Checking', 'checking', '1111');
+             INSERT INTO accounts (id, name, kind) VALUES (2, 'Card', 'credit');
+             INSERT INTO categories (id, name) VALUES (1, 'Utilities');
+             INSERT INTO categories (id, name, parent_id) VALUES (2, 'Electric', 1);
+             INSERT INTO payees (id, name, default_category_id) VALUES (1, 'Power Co', 2);
+             INSERT INTO payments (payee_id, account_id, category_id, date, amount_cents, source)
+                 VALUES (1, 1, 2, '2026-01-10', 12345, 'manual');
+             INSERT INTO payments (payee_id, account_id, category_id, date, amount_cents, source)
+                 VALUES (1, 2, NULL, '2026-01-11', 999, 'manual');",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn open_book_migrates_v8_book_to_v9_with_backup_and_clean_foreign_keys() {
+        let book = TempBook::new("v8to9");
+        build_v8_book(&book.path);
+        assert_eq!(user_version(&inspect(&book.path)).unwrap(), 8);
+
+        let state = open_session(&book.path_str());
+
+        let backups = crate::backup::list_backups(&book.path).unwrap();
+        assert_eq!(
+            backups.len(),
+            1,
+            "a pre-migration backup must be written first"
+        );
+        let backup_conn = inspect(Path::new(&backups[0].path));
+        assert_eq!(
+            user_version(&backup_conn).unwrap(),
+            8,
+            "the backup must hold the pre-migration (v8) book"
+        );
+
+        let conn = inspect(&book.path);
+        assert_eq!(user_version(&conn).unwrap(), 9);
+        assert_eq!(table_names(&conn), EXPECTED_TABLES);
+        assert!(foreign_key_violations(&conn).unwrap().is_empty());
+        assert_eq!(count(&state, "transactions"), 2);
+        assert_eq!(count(&state, "splits"), 4);
+        let sum = with_conn(&state, |conn| {
+            select_impl(conn, "SELECT SUM(amount_cents) AS s FROM splits", &[])
+        })
+        .unwrap();
+        assert_eq!(sum[0]["s"], json!(0), "every transaction must balance");
+        with_conn(&state, |conn| {
+            let foreign_keys: i64 = conn
+                .query_row("PRAGMA foreign_keys", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(foreign_keys, 1, "foreign_keys must be ON after migrating");
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn migration_leaving_fk_violations_is_rolled_back_and_foreign_keys_restored() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let migrations: &[(i64, &str)] = &[
+            (1, "CREATE TABLE parent (id INTEGER PRIMARY KEY);"),
+            (
+                2,
+                "CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parent (id));
+                 INSERT INTO child (id, parent_id) VALUES (1, 99);",
+            ),
+        ];
+
+        let err = apply_migrations(&mut conn, migrations)
+            .expect_err("a migration leaving an FK violation must fail");
+        assert!(
+            err.to_string()
+                .contains("migration 2 left foreign key violations"),
+            "got: {err}"
+        );
+        assert_eq!(
+            user_version(&conn).unwrap(),
+            1,
+            "migration 2 must roll back"
+        );
+        let child_exists: bool = conn
+            .query_row(
+                "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE name = 'child')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!child_exists, "rolled-back DDL must not persist");
+        let foreign_keys: i64 = conn
+            .query_row("PRAGMA foreign_keys", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(foreign_keys, 1, "foreign_keys must be restored ON on error");
     }
 }

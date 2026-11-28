@@ -1,24 +1,23 @@
 # Releasing fin-app
 
-This runbook covers publishing a signed release to the public
-[`kdcllc/fin-app-releases`](https://github.com/kdcllc/fin-app-releases) repo.
-The private `fin-app` repo runs CI; tag builds sign updater artifacts and publish
-installers, `.sig` files, and `latest.json` to the releases repo.
+This runbook covers publishing a signed release of fin-app. Releases are published
+to this repo, [`kdcllc/fin-app`](https://github.com/kdcllc/fin-app/releases) (public):
+tag builds sign updater artifacts and attach installers, `.sig` files, and
+`latest.json` to the GitHub Release for the tag.
 
 ## One-time setup checklist
 
 Complete these steps **once** before your first tag release:
 
-1. **Create the public releases repo** — `kdcllc/fin-app-releases` (public). Initialize it
-   with at least one commit on `main` (e.g. add a README). A zero-commit repo cannot host
-   a GitHub Release. CI publishes releases against the `main` ref of that repo
-   (`releaseCommitish` in the workflow).
+1. **Allow the workflow to write releases** — repo Settings → Actions → General →
+   Workflow permissions → **Read and write permissions**. CI publishes with the
+   workflow's own `GITHUB_TOKEN` (the workflow requests `contents: write`); no
+   personal access token is needed.
 2. **Confirm the updater endpoint** — `src-tauri/tauri.conf.json` must point at
-   `https://github.com/kdcllc/fin-app-releases/releases/latest/download/latest.json`
-   (already configured when this goal shipped).
-3. **Store GitHub Actions secrets** in the private `fin-app` repo
-   (Settings → Secrets and variables → Actions). Both are **required before
-   pushing any `v*` tag**; missing secrets fail the pipeline loudly.
+   `https://github.com/kdcllc/fin-app/releases/latest/download/latest.json`.
+3. **Store the signing secret** in the `fin-app` repo
+   (Settings → Secrets and variables → Actions). It is **required before pushing
+   any `v*` tag**; a missing secret fails the pipeline loudly.
 4. **Back up the minisign private key** — see [Private key backup](#private-key-backup).
 
 ## Required GitHub Actions secrets
@@ -26,15 +25,15 @@ Complete these steps **once** before your first tag release:
 | Secret | Purpose | How to set |
 |--------|---------|------------|
 | `TAURI_SIGNING_PRIVATE_KEY` | Minisign private key used to sign update bundles (`.sig` files) | Paste the **full contents** of `~/.tauri/fin-app.key` (local path: `~/.tauri/fin-app.key`). Never commit this file. |
-| `RELEASES_REPO_TOKEN` | PAT that lets CI write to `kdcllc/fin-app-releases` | Fine-grained PAT recommended: **Contents → Read and write** on `kdcllc/fin-app-releases` only. Classic PAT alternative: `repo` scope limited to that repository. |
 
 Do **not** create a `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` secret. The keypair was
 generated with an **empty password**. GitHub cannot store an empty secret value, and
 a placeholder (such as a space) would be treated as the wrong password and minisign
 decryption would fail.
 
-CI uses `RELEASES_REPO_TOKEN` by overriding the `GITHUB_TOKEN` environment variable
-on the `tauri-apps/tauri-action@v0` step (`tauri-action@v0` has no `token:` input).
+The `tauri-apps/tauri-action@v0` step reads the token from the `GITHUB_TOKEN`
+environment variable (it has no `token:` input); the workflow passes its own
+`GITHUB_TOKEN`.
 
 ## Local builds and updater artifacts
 
@@ -45,10 +44,14 @@ updater public key. Any build that produces updater artifacts (including
 `~/.tauri/fin-app.key`. Without it, Tauri fails the bundle when a pubkey is
 configured but no signing key is present.
 
-In CI, the platform build jobs (`build-tauri`) run **only on `v*` tag pushes** —
-PRs and pushes to `main` run just the quality gates (lint, typecheck, Vitest, Rust
-tests, clippy). This keeps Actions minutes low (macOS bills at 10x, Windows at 2x)
-and means non-tag CI never needs the signing secret.
+In CI, the platform build jobs (`build-tauri`) run on PRs, pushes to `main`, and
+`v*` tags. Non-tag builds disable updater artifacts via a workflow overlay
+(`src-tauri/ci-updater-off.json`, written at build time) so they never need the
+signing secret, publish nothing, and run the three platforms in parallel; their
+installers are uploaded as workflow artifacts and `verify-release` checks that
+Linux, Windows, and macOS installers are all present. Because `fin-app` is a public
+repo, these standard GitHub-hosted runner jobs (including macOS and Windows) do not
+consume Actions minutes; the 10x/2x minute multipliers apply only to private repos.
 
 ## Private key backup
 
@@ -86,12 +89,12 @@ If you **regenerate** the keypair:
 CI then:
 
 - Runs quality gates (lint, tests, clippy).
-- Builds installers on Linux, Windows, and macOS — these platform jobs run **only on
-  tag pushes**, serialized to avoid a `latest.json` race (see workflow comments in
+- Builds installers on Linux, Windows, and macOS — on tag builds these jobs are
+  serialized to avoid a `latest.json` race (see workflow comments in
   `.github/workflows/ci.yml`).
 - Signs updater artifacts with the minisign key.
 - Publishes bundles, `.sig` files, and `latest.json` to
-  `kdcllc/fin-app-releases` under the tag.
+  the GitHub Release for the tag on `kdcllc/fin-app`.
 - Runs `verify-release` to ensure `latest.json` includes Linux, Windows, and macOS.
 
 ## Unsigned installers (OS warnings)
@@ -134,7 +137,7 @@ Contract-time CI checks (YAML validity, tag-gated conditions) do **not** prove t
 full release pipeline end-to-end. After you complete the [one-time setup](#one-time-setup-checklist),
 run a **real tag build** (e.g. a patch release) and confirm:
 
-- The GitHub Release appears on `kdcllc/fin-app-releases`.
+- The GitHub Release appears on `kdcllc/fin-app` (Releases page).
 - `latest.json` lists Linux, Windows, and macOS with `url` and `signature`.
 - Installers and `.sig` assets are attached.
 - An installed app can check for updates successfully.

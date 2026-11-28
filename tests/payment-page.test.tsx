@@ -48,6 +48,9 @@ function createMockRepos(): Repositories {
       id: 1,
       name: "Checking",
       kind: "checking",
+      type: "ASSET",
+      subtype: "bank",
+      parent_id: 100,
       last4: null,
       gnucash_guid: null,
       archived: false,
@@ -56,6 +59,9 @@ function createMockRepos(): Repositories {
       id: 2,
       name: "Rewards Card",
       kind: "credit",
+      type: "LIABILITY",
+      subtype: "credit_card",
+      parent_id: 101,
       last4: null,
       gnucash_guid: null,
       archived: false,
@@ -216,6 +222,7 @@ function createMockRepos(): Repositories {
       },
     },
     importLog: {} as Repositories["importLog"],
+    ledger: {} as Repositories["ledger"],
     recurringBills: {} as Repositories["recurringBills"],
     async withTransaction<T>(work: (txRepos: Repositories) => Promise<T>): Promise<T> {
       return work(repos as Repositories);

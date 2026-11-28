@@ -4,6 +4,7 @@ import type { Account, Category, Payee, Payment } from "./entities";
 import type { GnucashSplit, GnucashTransaction, GnucashTransactionError, GnucashTransactionList } from "./gnucash-types";
 import type { Repositories } from "./index";
 import { normalizePayeeLabel } from "./payee-normalization";
+import type { TransactionRefRow } from "./repositories/ledger";
 
 export interface GnucashImportOptions {
   /** Mapped GnuCash account GUIDs selected for import. */
@@ -95,6 +96,11 @@ interface MappableTxn {
   amount_cents: number;
   payeeId?: number;
   payeeCreateSuggestion?: string;
+}
+
+/** Negate integer cents without producing `-0`. */
+function negateCents(cents: number): number {
+  return cents === 0 ? 0 : -cents;
 }
 
 function payeeKey(name: string): string {
@@ -223,14 +229,19 @@ function buildMappableTxn(
   };
 }
 
-function gnucashPaymentByGuid(payments: Payment[]): Map<string, Payment> {
-  const byGuid = new Map<string, Payment>();
-  for (const payment of payments) {
-    if (payment.source === "gnucash" && payment.external_ref) {
-      byGuid.set(payment.external_ref, payment);
+/**
+ * Per incoming GUID, the one existing `source = 'gnucash'` transaction it maps
+ * to: the payment-shaped one wins, then the lowest id (`refs` arrive ordered by id).
+ */
+function winnerByGuid(refs: TransactionRefRow[]): Map<string, TransactionRefRow> {
+  const winners = new Map<string, TransactionRefRow>();
+  for (const ref of refs) {
+    const current = winners.get(ref.external_ref);
+    if (current === undefined || (ref.payment_shaped && !current.payment_shaped)) {
+      winners.set(ref.external_ref, ref);
     }
   }
-  return byGuid;
+  return winners;
 }
 
 function buildDiffs(existing: Payment, mapped: MappableTxn): GnucashImportFieldDiff[] {
@@ -248,13 +259,7 @@ function buildDiffs(existing: Payment, mapped: MappableTxn): GnucashImportFieldD
   return diffs;
 }
 
-function findMergeCandidate(
-  mapped: MappableTxn,
-  payments: Payment[],
-  gnucashByGuid: Map<string, Payment>,
-): Payment | null {
-  if (gnucashByGuid.has(mapped.txn.txn_guid)) return null;
-
+function findMergeCandidate(mapped: MappableTxn, payments: Payment[]): Payment | null {
   for (const payment of payments) {
     if (payment.source !== "manual") continue;
     if (payment.account_id !== mapped.accountId) continue;
@@ -283,7 +288,15 @@ export async function planGnucashImport(
   const accountGuids = selectedAccountGuids(options);
   const window = dateWindow(list);
   const payments = await repos.payments.list(window);
-  const gnucashByGuid = gnucashPaymentByGuid(payments);
+  const paymentsById = new Map(payments.map((payment) => [payment.id, payment]));
+  // Any-shape lookup: a GUID already imported (even edited out of payment shape
+  // or re-dated outside the window) must never be planned `new` or merged.
+  const winners = winnerByGuid(
+    await repos.ledger.listTransactionsByExternalRef(
+      "gnucash",
+      list.transactions.map((txn) => txn.txn_guid),
+    ),
+  );
 
   for (const txn of list.transactions) {
     const unmappableReason = classifyUnmappable(txn, entities, accountGuids);
@@ -293,9 +306,19 @@ export async function planGnucashImport(
     }
 
     const mapped = buildMappableTxn(txn, entities, accountGuids)!;
-    const existing = gnucashByGuid.get(txn.txn_guid);
+    const winner = winners.get(txn.txn_guid);
 
-    if (existing) {
+    if (winner) {
+      if (!winner.payment_shaped) {
+        // Locally edited transaction: local edits win, never overwritten.
+        plan.unchanged.push({ txnGuid: txn.txn_guid, paymentId: winner.id });
+        continue;
+      }
+      const existing = paymentsById.get(winner.id) ?? (await repos.payments.get(winner.id));
+      if (existing === null) {
+        plan.unchanged.push({ txnGuid: txn.txn_guid, paymentId: winner.id });
+        continue;
+      }
       const diffs = buildDiffs(existing, mapped);
       if (diffs.length === 0) {
         plan.unchanged.push({ txnGuid: txn.txn_guid, paymentId: existing.id });
@@ -305,7 +328,7 @@ export async function planGnucashImport(
       continue;
     }
 
-    const mergeCandidate = findMergeCandidate(mapped, payments, gnucashByGuid);
+    const mergeCandidate = findMergeCandidate(mapped, payments);
     if (mergeCandidate) {
       plan.mergeCandidates.push({ txnGuid: txn.txn_guid, paymentId: mergeCandidate.id });
       continue;
@@ -367,31 +390,22 @@ function buildCommitStatements(
       continue;
     }
 
+    // Payment-shaped transaction: header + expense split (+amount) + funding
+    // split (-amount). Split inserts bind the header via MAX(id) (same batch).
     statements.push({
-      sql: `INSERT INTO payments (
-              payee_id,
-              account_id,
-              category_id,
-              date,
-              amount_cents,
-              memo,
-              source,
-              external_ref,
-              source_sheet,
-              source_row,
-              source_col,
-              occurrence_index
-            )
-            VALUES (?, ?, ?, ?, ?, ?, 'gnucash', ?, NULL, NULL, NULL, NULL)`,
-      params: [
-        payeeId,
-        row.accountId,
-        row.categoryId,
-        row.date,
-        row.amount_cents,
-        row.memo,
-        row.txnGuid,
-      ],
+      sql: `INSERT INTO transactions (date, payee_id, memo, source, external_ref)
+            VALUES (?, ?, ?, 'gnucash', ?)`,
+      params: [row.date, payeeId, row.memo, row.txnGuid],
+    });
+    statements.push({
+      sql: `INSERT INTO splits (transaction_id, account_id, amount_cents)
+            VALUES ((SELECT MAX(id) FROM transactions), ?, ?)`,
+      params: [row.categoryId, row.amount_cents],
+    });
+    statements.push({
+      sql: `INSERT INTO splits (transaction_id, account_id, amount_cents)
+            VALUES ((SELECT MAX(id) FROM transactions), ?, ?)`,
+      params: [row.accountId, negateCents(row.amount_cents)],
     });
     inserted += 1;
     paymentWriteCount += 1;
@@ -414,7 +428,7 @@ function buildCommitStatements(
     }
 
     statements.push({
-      sql: "UPDATE payments SET source = 'gnucash', external_ref = ? WHERE id = ?",
+      sql: "UPDATE transactions SET source = 'gnucash', external_ref = ? WHERE id = ?",
       params: [row.txnGuid, row.paymentId],
     });
     merged += 1;
@@ -445,28 +459,45 @@ function buildCommitStatements(
 
     const fields: string[] = [];
     const params: (string | number | null)[] = [];
+    let amountChanged = false;
     for (const diff of row.diffs) {
       if (diff.field === "date") {
         fields.push("date = ?");
         params.push(mapped.txn.post_date);
       } else if (diff.field === "amount_cents") {
-        fields.push("amount_cents = ?");
-        params.push(mapped.amount_cents);
+        amountChanged = true;
       } else if (diff.field === "memo") {
         fields.push("memo = ?");
         params.push(mapped.txn.description);
       }
     }
 
-    if (fields.length === 0) {
+    if (fields.length === 0 && !amountChanged) {
       skipped += 1;
       continue;
     }
 
-    statements.push({
-      sql: `UPDATE payments SET ${fields.join(", ")} WHERE id = ?`,
-      params: [...params, row.paymentId],
-    });
+    if (fields.length > 0) {
+      statements.push({
+        sql: `UPDATE transactions SET ${fields.join(", ")} WHERE id = ?`,
+        params: [...params, row.paymentId],
+      });
+    }
+    if (amountChanged) {
+      // The EXPENSE split carries +amount, the funding split -amount.
+      statements.push({
+        sql: `UPDATE splits SET amount_cents = ?
+              WHERE transaction_id = ?
+                AND account_id IN (SELECT id FROM accounts WHERE type = 'EXPENSE')`,
+        params: [mapped.amount_cents, row.paymentId],
+      });
+      statements.push({
+        sql: `UPDATE splits SET amount_cents = ?
+              WHERE transaction_id = ?
+                AND account_id NOT IN (SELECT id FROM accounts WHERE type = 'EXPENSE')`,
+        params: [negateCents(mapped.amount_cents), row.paymentId],
+      });
+    }
     paymentWriteCount += 1;
 
     if (
@@ -483,14 +514,49 @@ function buildCommitStatements(
   return { statements, inserted, merged, skipped };
 }
 
+/**
+ * Defence in depth: the plan never lists an already-imported GUID as `new`
+ * (any-shape lookup), so this is unreachable through the public API. Refuse
+ * loudly, before any write, rather than re-inserting a second transaction with
+ * the same `external_ref`.
+ */
+async function assertNoExistingGnucashRefs(
+  db: Database,
+  plan: GnucashImportPlan,
+  approved: GnucashImportApproval,
+): Promise<void> {
+  const approvedNew = new Set(approved.approvedNewTxnGuids);
+  const guids = plan.new.map((row) => row.txnGuid).filter((guid) => approvedNew.has(guid));
+  if (guids.length === 0) return;
+
+  const CHUNK = 500;
+  for (let offset = 0; offset < guids.length; offset += CHUNK) {
+    const chunk = guids.slice(offset, offset + CHUNK);
+    const placeholders = chunk.map(() => "?").join(", ");
+    const existing = await db.select<{ external_ref: string }>(
+      `SELECT external_ref FROM transactions
+       WHERE source = 'gnucash' AND external_ref IN (${placeholders})
+       ORDER BY external_ref`,
+      chunk,
+    );
+    if (existing.length > 0) {
+      throw new Error(
+        `GnuCash import blocked: transaction ${existing[0].external_ref} was already imported. ` +
+          "No rows were imported.",
+      );
+    }
+  }
+}
+
 export async function commitGnucashImport(
   db: Database,
   repos: Repositories,
   approved: GnucashImportApproval,
 ): Promise<GnucashImportResult> {
-  void db;
   const { list, options } = assertCommitContext(approved);
   const plan = await planGnucashImport(repos, list, options);
+
+  await assertNoExistingGnucashRefs(db, plan, approved);
 
   const entities = await loadMappedEntities(repos);
   const accountGuids = selectedAccountGuids(options);
