@@ -43,6 +43,8 @@ function makeRng(seed: number) {
 
 const SEEDS = [20240611, 987654321];
 const OPS_PER_SEED = 250;
+// CI runners are ~3x slower than local; 250 ops take ~5 s there, over the 5 s default.
+const SEED_TEST_TIMEOUT_MS = 30_000;
 const FAR_FUTURE = "9999-12-31";
 
 let t: TestDb;
@@ -161,170 +163,174 @@ describe("PRNG", () => {
 
 describe("ledger invariants under random operations", () => {
   for (const seed of SEEDS) {
-    it(`holds after each of ${OPS_PER_SEED} operations (seed ${seed})`, async () => {
-      const rng = makeRng(seed);
-      const date = () =>
-        `2024-${String(rng.int(1, 12)).padStart(2, "0")}-${String(rng.int(1, 28)).padStart(2, "0")}`;
-      const cents = () => rng.int(1, 250_000);
-      const maybePayee = () => (rng.next() < 0.5 ? rng.pick(payeeIds) : null);
-      const randomSplits = (): NewSplit[] => {
-        const n = rng.int(2, 4);
-        const splits: NewSplit[] = [];
-        let sum = 0;
-        for (let i = 0; i < n - 1; i++) {
-          const amount = rng.int(-100_000, 100_000);
-          sum += amount;
-          splits.push({ account_id: rng.pick(postable).id, amount_cents: amount });
-        }
-        splits.push({ account_id: rng.pick(postable).id, amount_cents: -sum });
-        return splits;
-      };
-      const existingIds = async () =>
-        (await t.db.select<{ id: number }>("SELECT id FROM transactions ORDER BY id")).map(
-          (r) => r.id,
-        );
+    it(
+      `holds after each of ${OPS_PER_SEED} operations (seed ${seed})`,
+      async () => {
+        const rng = makeRng(seed);
+        const date = () =>
+          `2024-${String(rng.int(1, 12)).padStart(2, "0")}-${String(rng.int(1, 28)).padStart(2, "0")}`;
+        const cents = () => rng.int(1, 250_000);
+        const maybePayee = () => (rng.next() < 0.5 ? rng.pick(payeeIds) : null);
+        const randomSplits = (): NewSplit[] => {
+          const n = rng.int(2, 4);
+          const splits: NewSplit[] = [];
+          let sum = 0;
+          for (let i = 0; i < n - 1; i++) {
+            const amount = rng.int(-100_000, 100_000);
+            sum += amount;
+            splits.push({ account_id: rng.pick(postable).id, amount_cents: amount });
+          }
+          splits.push({ account_id: rng.pick(postable).id, amount_cents: -sum });
+          return splits;
+        };
+        const existingIds = async () =>
+          (await t.db.select<{ id: number }>("SELECT id FROM transactions ORDER BY id")).map(
+            (r) => r.id,
+          );
 
-      const counts: Record<string, number> = {};
-      const bump = (k: string) => (counts[k] = (counts[k] ?? 0) + 1);
-      let i = 0;
-      let desc = "";
+        const counts: Record<string, number> = {};
+        const bump = (k: string) => (counts[k] = (counts[k] ?? 0) + 1);
+        let i = 0;
+        let desc = "";
 
-      try {
-        for (; i < OPS_PER_SEED; i++) {
-          const roll = rng.int(0, 99);
-          const ids = await existingIds();
-          const before = await snapshot();
-          let rejected: (new (...args: never[]) => Error) | null = null;
-          let attempt: () => Promise<unknown>;
+        try {
+          for (; i < OPS_PER_SEED; i++) {
+            const roll = rng.int(0, 99);
+            const ids = await existingIds();
+            const before = await snapshot();
+            let rejected: (new (...args: never[]) => Error) | null = null;
+            let attempt: () => Promise<unknown>;
 
-          if (roll < 22) {
-            desc = "post";
-            attempt = () =>
-              postTransaction(ledger, {
-                date: date(),
-                payee_id: maybePayee(),
-                splits: randomSplits(),
-              });
-          } else if (roll < 36 && ids.length > 0) {
-            desc = "update";
-            const id = rng.pick(ids);
-            attempt = () =>
-              updateTransaction(ledger, id, {
-                date: date(),
-                payee_id: maybePayee(),
-                splits: randomSplits(),
-              });
-          } else if (roll < 46 && ids.length > 0) {
-            desc = "delete";
-            const id = rng.pick(ids);
-            attempt = () => deleteTransaction(ledger, id);
-          } else if (roll < 58) {
-            desc = "transfer";
-            const from = rng.pick(funding);
-            const to = rng.pick(funding.filter((a) => a.id !== from.id));
-            attempt = () =>
-              createTransfer(ledger, {
-                date: date(),
-                fromAccountId: from.id,
-                toAccountId: to.id,
-                amount_cents: cents(),
-              });
-          } else if (roll < 70) {
-            desc = "income";
-            attempt = () =>
-              createIncome(ledger, {
-                date: date(),
-                incomeAccountId: rng.pick(incomeAccounts).id,
-                depositAccountId: rng.pick(funding).id,
-                amount_cents: cents(),
-                payee_id: maybePayee(),
-              });
-          } else if (roll < 80) {
-            desc = "opening balance";
-            const account = rng.pick(openable);
-            const amount = rng.next() < 0.2 ? 0 : rng.int(-50_000, 500_000);
-            attempt = () => setOpeningBalance(ledger, account.id, "2024-01-01", amount);
-          } else if (roll < 87) {
-            desc = "unbalanced post (rejected)";
-            rejected = UnbalancedTransactionError;
-            const splits = randomSplits();
-            splits[0] = { ...splits[0], amount_cents: splits[0].amount_cents + rng.int(1, 5000) };
-            attempt = () => postTransaction(ledger, { date: date(), splits });
-          } else if (roll < 92 && ids.length > 0) {
-            desc = "unbalanced update (rejected)";
-            rejected = UnbalancedTransactionError;
-            const id = rng.pick(ids);
-            const splits = randomSplits();
-            splits[1] = { ...splits[1], amount_cents: splits[1].amount_cents - rng.int(1, 5000) };
-            attempt = () => updateTransaction(ledger, id, { date: date(), splits });
-          } else if (roll < 95) {
-            desc = "post to placeholder (rejected)";
-            rejected = ValidationError;
-            const amount = cents();
-            attempt = () =>
-              postTransaction(ledger, {
-                date: date(),
-                splits: [
-                  { account_id: placeholderId, amount_cents: amount },
-                  { account_id: rng.pick(postable).id, amount_cents: -amount },
-                ],
-              });
-          } else if (roll < 98) {
-            desc = "post to unknown account (rejected)";
-            rejected = ForeignKeyViolationError;
-            const amount = cents();
-            attempt = () =>
-              postTransaction(ledger, {
-                date: date(),
-                splits: [
-                  { account_id: 9_999_999, amount_cents: amount },
-                  { account_id: rng.pick(postable).id, amount_cents: -amount },
-                ],
-              });
-          } else {
-            desc = "transfer to self (rejected)";
-            rejected = ValidationError;
-            const acct = rng.pick(funding);
-            attempt = () =>
-              createTransfer(ledger, {
-                date: date(),
-                fromAccountId: acct.id,
-                toAccountId: acct.id,
-                amount_cents: cents(),
-              });
+            if (roll < 22) {
+              desc = "post";
+              attempt = () =>
+                postTransaction(ledger, {
+                  date: date(),
+                  payee_id: maybePayee(),
+                  splits: randomSplits(),
+                });
+            } else if (roll < 36 && ids.length > 0) {
+              desc = "update";
+              const id = rng.pick(ids);
+              attempt = () =>
+                updateTransaction(ledger, id, {
+                  date: date(),
+                  payee_id: maybePayee(),
+                  splits: randomSplits(),
+                });
+            } else if (roll < 46 && ids.length > 0) {
+              desc = "delete";
+              const id = rng.pick(ids);
+              attempt = () => deleteTransaction(ledger, id);
+            } else if (roll < 58) {
+              desc = "transfer";
+              const from = rng.pick(funding);
+              const to = rng.pick(funding.filter((a) => a.id !== from.id));
+              attempt = () =>
+                createTransfer(ledger, {
+                  date: date(),
+                  fromAccountId: from.id,
+                  toAccountId: to.id,
+                  amount_cents: cents(),
+                });
+            } else if (roll < 70) {
+              desc = "income";
+              attempt = () =>
+                createIncome(ledger, {
+                  date: date(),
+                  incomeAccountId: rng.pick(incomeAccounts).id,
+                  depositAccountId: rng.pick(funding).id,
+                  amount_cents: cents(),
+                  payee_id: maybePayee(),
+                });
+            } else if (roll < 80) {
+              desc = "opening balance";
+              const account = rng.pick(openable);
+              const amount = rng.next() < 0.2 ? 0 : rng.int(-50_000, 500_000);
+              attempt = () => setOpeningBalance(ledger, account.id, "2024-01-01", amount);
+            } else if (roll < 87) {
+              desc = "unbalanced post (rejected)";
+              rejected = UnbalancedTransactionError;
+              const splits = randomSplits();
+              splits[0] = { ...splits[0], amount_cents: splits[0].amount_cents + rng.int(1, 5000) };
+              attempt = () => postTransaction(ledger, { date: date(), splits });
+            } else if (roll < 92 && ids.length > 0) {
+              desc = "unbalanced update (rejected)";
+              rejected = UnbalancedTransactionError;
+              const id = rng.pick(ids);
+              const splits = randomSplits();
+              splits[1] = { ...splits[1], amount_cents: splits[1].amount_cents - rng.int(1, 5000) };
+              attempt = () => updateTransaction(ledger, id, { date: date(), splits });
+            } else if (roll < 95) {
+              desc = "post to placeholder (rejected)";
+              rejected = ValidationError;
+              const amount = cents();
+              attempt = () =>
+                postTransaction(ledger, {
+                  date: date(),
+                  splits: [
+                    { account_id: placeholderId, amount_cents: amount },
+                    { account_id: rng.pick(postable).id, amount_cents: -amount },
+                  ],
+                });
+            } else if (roll < 98) {
+              desc = "post to unknown account (rejected)";
+              rejected = ForeignKeyViolationError;
+              const amount = cents();
+              attempt = () =>
+                postTransaction(ledger, {
+                  date: date(),
+                  splits: [
+                    { account_id: 9_999_999, amount_cents: amount },
+                    { account_id: rng.pick(postable).id, amount_cents: -amount },
+                  ],
+                });
+            } else {
+              desc = "transfer to self (rejected)";
+              rejected = ValidationError;
+              const acct = rng.pick(funding);
+              attempt = () =>
+                createTransfer(ledger, {
+                  date: date(),
+                  fromAccountId: acct.id,
+                  toAccountId: acct.id,
+                  amount_cents: cents(),
+                });
+            }
+
+            if (rejected !== null) {
+              await expect(attempt(), desc).rejects.toBeInstanceOf(rejected);
+              expect(await snapshot(), `${desc} must change nothing`).toBe(before);
+            } else {
+              await attempt();
+            }
+            bump(desc);
+            await assertInvariants();
           }
 
-          if (rejected !== null) {
-            await expect(attempt(), desc).rejects.toBeInstanceOf(rejected);
-            expect(await snapshot(), `${desc} must change nothing`).toBe(before);
-          } else {
-            await attempt();
+          // The run must have exercised every operation kind, including rejections.
+          expect(i).toBeGreaterThanOrEqual(200);
+          for (const kind of [
+            "post",
+            "update",
+            "delete",
+            "transfer",
+            "income",
+            "opening balance",
+            "unbalanced post (rejected)",
+          ]) {
+            expect(counts[kind] ?? 0, `kind "${kind}" never ran`).toBeGreaterThan(0);
           }
-          bump(desc);
-          await assertInvariants();
+          expect((await existingIds()).length).toBeGreaterThan(0);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          throw new Error(
+            `ledger invariant failure [seed=${seed} op=${i} kind="${desc}"]: ${message}`,
+            { cause: error },
+          );
         }
-
-        // The run must have exercised every operation kind, including rejections.
-        expect(i).toBeGreaterThanOrEqual(200);
-        for (const kind of [
-          "post",
-          "update",
-          "delete",
-          "transfer",
-          "income",
-          "opening balance",
-          "unbalanced post (rejected)",
-        ]) {
-          expect(counts[kind] ?? 0, `kind "${kind}" never ran`).toBeGreaterThan(0);
-        }
-        expect((await existingIds()).length).toBeGreaterThan(0);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        throw new Error(
-          `ledger invariant failure [seed=${seed} op=${i} kind="${desc}"]: ${message}`,
-          { cause: error },
-        );
-      }
-    });
+      },
+      SEED_TEST_TIMEOUT_MS,
+    );
   }
 });
